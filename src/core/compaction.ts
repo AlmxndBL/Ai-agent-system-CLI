@@ -20,7 +20,7 @@ function isValidSplitPoint(messages: ModelMessage[], index: number): boolean {
   return true;
 }
 
-export function estimateTokenCount(messages: ModelMessage[]): number {
+function estimateTokenCount(messages: ModelMessage[]): number {
   const charCount = JSON.stringify(messages).length;
   return Math.ceil(charCount / 4.0); // Simple 4 chars/token heuristic
 }

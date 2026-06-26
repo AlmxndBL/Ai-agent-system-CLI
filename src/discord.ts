@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, ChannelType, Message } from 'discord.js';
+import { Client, GatewayIntentBits, Message } from 'discord.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
@@ -101,7 +101,7 @@ setApprovalHandler((toolName, args) => {
         ? `⚠️ **[WARNING: TAINTED CONTEXT DETECTED]**\nReasons:\n${args.reasons.map((r: string) => `- ${r}`).join('\n')}\n`
         : '';
         
-      const promptMsg = await channel.send(
+      await channel.send(
         `⚠️ **[Approval Required]**\n` +
         taintWarning +
         `**Action**: \`${toolName}\`\n` +
@@ -257,7 +257,7 @@ client.on('messageCreate', async (msg) => {
     // Run the agent inside sessionLocalStorage context to preserve channel id
     const reply = await sessionLocalStorage.run({ sessionId, discordChannelId: msg.channel.id }, async () => {
       return await runAgent(session, content, {
-        onStepFinish({ toolCalls, toolResults }) {
+        onStepFinish({ toolCalls }) {
           toolCalls.forEach(call => {
             console.log(`🔧 [Discord/Tool Call] ${call.toolName}`);
           });

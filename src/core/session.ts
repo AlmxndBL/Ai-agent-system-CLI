@@ -15,7 +15,7 @@ export interface Session {
 
 const DEFAULT_SESSION_DIR = path.join(os.homedir(), '.agent', 'sessions');
 
-export function getSessionDir(): string {
+function getSessionDir(): string {
   if (process.env.SESSION_STORAGE_PATH) {
     return path.resolve(process.env.SESSION_STORAGE_PATH);
   }
@@ -26,7 +26,7 @@ async function ensureSessionDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
-export function getSessionPath(sessionId: string): string {
+function getSessionPath(sessionId: string): string {
   // Replace unsafe chars for filename
   const safeId = sessionId.replace(/[^a-zA-Z0-9_\-]/g, '_');
   return path.join(getSessionDir(), `${safeId}.json`);

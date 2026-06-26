@@ -5,6 +5,8 @@
     "moduleResolution": "node16",
     "lib": ["es2022"],
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
