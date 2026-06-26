@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import { isKillSwitchTriggered } from './core/audit';
+import { assertLowPrivilege } from './core/hardening';
 
 const HEARTBEAT_PATH = path.join(os.homedir(), '.agent', 'heartbeat');
 const MAX_CRASH_COUNT = 10;
@@ -57,15 +58,19 @@ async function startDaemon() {
   console.log(`🚀 [Supervisor] Spawning Telegram daemon (Attempt ${consecutiveCrashes + 1})...`);
   lastRestartTime = Date.now();
 
-  // Run via tsx if we are in development/source mode, otherwise use node on compiled output
-  const scriptPath = path.join(__dirname, 'telegram.ts');
-  const hasTsx = await fs.access(path.join(process.cwd(), 'node_modules', '.bin', 'tsx')).then(() => true).catch(() => false);
+  // Decide source-mode (tsx) vs compiled-mode (node) by what actually sits next to
+  // THIS file — not by whether the tsx binary happens to be installed. In compiled
+  // mode __dirname is dist/ and only telegram.js exists, so we must use node even
+  // though tsx (a devDependency) is usually still present in node_modules.
+  const tsScript = path.join(__dirname, 'telegram.ts');
+  const jsScript = path.join(__dirname, 'telegram.js');
+  const hasTsSource = await fs.access(tsScript).then(() => true).catch(() => false);
 
-  const command = hasTsx ? 'npx' : 'node';
-  const args = hasTsx ? ['tsx', scriptPath] : [path.join(__dirname, 'dist', 'telegram.js')];
+  const command = hasTsSource ? 'npx' : 'node';
+  const args = hasTsSource ? ['tsx', tsScript] : [jsScript];
 
-  // Resolve command extensions on Windows
-  const resolvedCommand = os.platform() === 'win32' ? `${command}.cmd` : command;
+  // Only npx needs the .cmd shim on Windows; `node` is node.exe (node.cmd doesn't exist).
+  const resolvedCommand = os.platform() === 'win32' && command === 'npx' ? 'npx.cmd' : command;
 
   child = spawn(resolvedCommand, args, {
     stdio: 'inherit',
@@ -132,6 +137,9 @@ async function watchdogLoop() {
     setTimeout(watchdogLoop, HEALTH_CHECK_INTERVAL);
   }
 }
+
+// Refuse/warn if the supervisor is running with elevated privileges (§9.5)
+assertLowPrivilege();
 
 // Start supervisor daemon
 startDaemon().then(() => {

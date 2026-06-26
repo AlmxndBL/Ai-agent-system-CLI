@@ -8,6 +8,8 @@ const SENSITIVE_KEYS = [
   'GEMINI_API_KEY',
   'GOOGLE_GENERATIVE_AI_API_KEY',
   'GOOGLE_GENERATION_API_KEY',
+  'ANTHROPIC_API_KEY',
+  'CLAUDE_API_KEY',
   'DISCORD_TOKEN',
   'TOTP_SECRET',
   'OWNER_DISCORD_ID',
@@ -37,6 +39,20 @@ export function initSecretBroker(): void {
  */
 export function getSecret(key: string): string {
   return secretStore.get(key) || '';
+}
+
+/**
+ * Returns a copy of process.env with every known sensitive key stripped, for
+ * handing to a child process (run_bash). Defense-in-depth: even if a secret were
+ * re-introduced into process.env after initSecretBroker(), it never reaches a
+ * spawned subprocess. (§9.5 secret isolation / T4 secret exfiltration)
+ */
+export function getSafeChildEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of SENSITIVE_KEYS) {
+    delete env[key];
+  }
+  return env;
 }
 
 /**

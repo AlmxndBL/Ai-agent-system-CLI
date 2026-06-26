@@ -5,7 +5,8 @@ import * as dotenv from 'dotenv';
 import { loadSession } from './core/session';
 import { runAgent } from './core/agent';
 import { setApprovalHandler } from './core/approval';
-import { initSecretBroker, getSecret } from './core/secrets';
+import { initSecretBroker } from './core/secrets';
+import { getProviderName, getModelId, checkProviderReady } from './core/providers';
 
 // Load environment variables
 dotenv.config();
@@ -24,24 +25,19 @@ async function startRepl() {
   const sessionId = getSessionIdForCwd();
   const cwd = process.cwd();
   
-  // Verify API Key based on active provider
-  const provider = process.env.MODEL_PROVIDER || 'deepseek';
-  if (provider === 'deepseek') {
-    if (!getSecret('DEEPSEEK_API_KEY')) {
-      console.error('Error: DEEPSEEK_API_KEY is not set in environment or .env file.');
-      process.exit(1);
-    }
-  } else {
-    if (!getSecret('GEMINI_API_KEY') && !getSecret('GOOGLE_GENERATION_API_KEY') && !getSecret('GOOGLE_GENERATIVE_AI_API_KEY')) {
-      console.error('Error: GEMINI_API_KEY / GOOGLE_GENERATIVE_AI_API_KEY is not set in environment or .env file.');
-      process.exit(1);
-    }
+  // Verify credentials for the active provider (Hermes/Ollama needs none)
+  const provider = getProviderName();
+  const credErr = checkProviderReady(provider);
+  if (credErr) {
+    console.error(`Error: provider '${provider}' is not ready — ${credErr} (set it in your .env file).`);
+    process.exit(1);
   }
-  
+
   console.log('====================================================');
   console.log(`🤖 AI Agent CLI (Phase 2 - Knowledge Graph)`);
-  console.log(`CWD:     ${cwd}`);
-  console.log(`Session: ${sessionId}`);
+  console.log(`CWD:      ${cwd}`);
+  console.log(`Session:  ${sessionId}`);
+  console.log(`Provider: ${provider} (${getModelId(provider)})`);
   console.log('====================================================\n');
   
   // Load session
@@ -86,9 +82,18 @@ async function startRepl() {
       }
       
       console.log('\nThinking...');
-      
+
       try {
+        let started = false;
         const reply = await runAgent(session, trimmed, {
+          onTextDelta(delta) {
+            // Print the prompt prefix lazily so tool-call logs don't split the line
+            if (!started) {
+              process.stdout.write('\nAgent > ');
+              started = true;
+            }
+            process.stdout.write(delta);
+          },
           onStepFinish({ toolCalls, toolResults }) {
             // Log tool calls
             toolCalls.forEach((call: any) => {
@@ -96,16 +101,21 @@ async function startRepl() {
             });
             // Log tool results
             toolResults.forEach((res: any) => {
-              const summary = typeof res.output === 'string' 
-                ? res.output.substring(0, 100).replace(/\r?\n/g, ' ') 
+              const summary = typeof res.output === 'string'
+                ? res.output.substring(0, 100).replace(/\r?\n/g, ' ')
                 : JSON.stringify(res.output);
               const truncated = summary.length > 100 ? '...' : '';
               console.log(`📊 [Tool Result] ${res.toolName} -> ${summary.substring(0, 100)}${truncated}`);
             });
           }
         });
-        
-        console.log(`\nAgent > ${reply}`);
+
+        if (started) {
+          process.stdout.write('\n');
+        } else if (reply) {
+          // Model produced no streamed text (e.g. tool-only turn) — show the final text
+          console.log(`\nAgent > ${reply}`);
+        }
       } catch (err: any) {
         console.error(`\n❌ Error: ${err.message}`);
       }

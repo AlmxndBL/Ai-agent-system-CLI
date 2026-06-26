@@ -9,37 +9,60 @@ import { sessionLocalStorage } from '../core/session';
 import { logAudit, isKillSwitchTriggered } from '../core/audit';
 import { redactSecrets } from '../core/secrets';
 
+// True iff `child` is `parent` itself or lives strictly inside it.
+// Uses path.relative so a sibling sharing a string prefix (e.g. "<cwd>-backup")
+// can never pass — `startsWith` alone is exploitable here.
+export function isInsideRoot(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+// realpath the nearest ancestor that actually exists — used to validate the
+// destination of a not-yet-created file (e.g. write_file), so a symlinked
+// parent directory cannot smuggle the write outside the workspace root.
+async function realpathNearestAncestor(p: string): Promise<string> {
+  let current = path.resolve(p);
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      return await fs.realpath(current);
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        const parent = path.dirname(current);
+        if (parent === current) return current; // reached filesystem root
+        current = parent;
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 // Helper to validate and restrict paths to current working directory (CWD)
 export async function validatePath(userPath: string): Promise<string> {
   const cwd = path.resolve(process.cwd());
   const resolved = path.resolve(cwd, userPath);
-  
-  // Prevent path traversal
-  if (!resolved.startsWith(cwd)) {
+
+  // Lexical containment (catches ../ and sibling-prefix escapes)
+  if (!isInsideRoot(cwd, resolved)) {
     throw new Error(`Access denied: path '${userPath}' is outside workspace root`);
   }
-  
+
   try {
-    // Resolve symlinks
+    // Resolve symlinks on the real target, then re-verify containment (TOCTOU-aware: realpath after resolve)
     const real = await fs.realpath(resolved);
-    if (!real.startsWith(cwd)) {
+    if (!isInsideRoot(cwd, real)) {
       throw new Error(`Access denied: path resolves outside workspace root`);
     }
-    
-    // Check if path is a symlink pointing outside
-    const stat = await fs.lstat(resolved);
-    if (stat.isSymbolicLink()) {
-      const target = await fs.readlink(resolved);
-      const targetResolved = path.resolve(path.dirname(resolved), target);
-      if (!targetResolved.startsWith(cwd)) {
-        throw new Error(`Access denied: symbolic link points outside workspace root`);
-      }
-    }
-    
     return real;
   } catch (err: any) {
     if (err.code === 'ENOENT') {
-      // Path does not exist yet, check containment of resolved path
+      // Path does not exist yet — verify the nearest existing ancestor stays
+      // inside the root, so a symlinked parent dir can't escape on write.
+      const realParent = await realpathNearestAncestor(path.dirname(resolved));
+      if (!isInsideRoot(cwd, realParent)) {
+        throw new Error(`Access denied: parent of '${userPath}' resolves outside workspace root`);
+      }
       return resolved;
     }
     throw err;

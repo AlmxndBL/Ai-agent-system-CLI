@@ -9,8 +9,10 @@
     "start": "node dist/cli.js"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.87",
     "@ai-sdk/deepseek": "^2.0.40",
     "@ai-sdk/google": "^3.0.84",
+    "@ai-sdk/openai-compatible": "^2.0.52",
     "ai": "^6.0.211",
     "discord.js": "^14.26.4",
     "dotenv": "^16.4.5",

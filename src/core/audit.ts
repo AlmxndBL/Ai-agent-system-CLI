@@ -78,6 +78,66 @@ export async function logAudit(sessionId: string, action: string, details: any):
   return entry;
 }
 
+export interface AuditVerifyResult {
+  valid: boolean;
+  entries: number;
+  brokenAtIndex?: number;
+  reason?: string;
+}
+
+/**
+ * Re-derives the hash chain from disk to detect tampering (§9.6).
+ * For each entry it recomputes the SHA-256 over the exact base fields (in the same
+ * key order logAudit used), checks it matches the stored hash, that prevHash links
+ * to the previous entry, and that the index sequence is intact. Any edit, deletion,
+ * insertion, or reordering breaks the chain and is reported with its position.
+ */
+export async function verifyAuditChain(): Promise<AuditVerifyResult> {
+  let content: string;
+  try {
+    content = await fs.readFile(AUDIT_LOG_PATH, 'utf8');
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return { valid: true, entries: 0 };
+    throw err;
+  }
+
+  const lines = content.trim().split('\n').filter(line => line.trim() !== '');
+  let prevHash = '0'.repeat(64);
+
+  for (let i = 0; i < lines.length; i++) {
+    let entry: AuditEntry;
+    try {
+      entry = JSON.parse(lines[i]) as AuditEntry;
+    } catch {
+      return { valid: false, entries: lines.length, brokenAtIndex: i, reason: `Entry at line ${i} is not valid JSON (log truncated or corrupted)` };
+    }
+
+    // Recompute over the same fields, in the same order, that logAudit hashed.
+    const baseEntry = {
+      index: entry.index,
+      timestamp: entry.timestamp,
+      sessionId: entry.sessionId,
+      action: entry.action,
+      details: entry.details,
+      prevHash: entry.prevHash
+    };
+    const recomputed = crypto.createHash('sha256').update(JSON.stringify(baseEntry)).digest('hex');
+
+    if (recomputed !== entry.hash) {
+      return { valid: false, entries: lines.length, brokenAtIndex: i, reason: `Entry #${entry.index} hash mismatch — contents were altered` };
+    }
+    if (entry.prevHash !== prevHash) {
+      return { valid: false, entries: lines.length, brokenAtIndex: i, reason: `Entry #${entry.index} prevHash broken — an entry was inserted or removed` };
+    }
+    if (entry.index !== i) {
+      return { valid: false, entries: lines.length, brokenAtIndex: i, reason: `Entry at line ${i} has out-of-sequence index #${entry.index}` };
+    }
+    prevHash = entry.hash;
+  }
+
+  return { valid: true, entries: lines.length };
+}
+
 // Kill-switch check & trigger functions
 export async function isKillSwitchTriggered(): Promise<boolean> {
   try {

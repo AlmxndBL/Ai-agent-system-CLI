@@ -4,7 +4,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { isKillSwitchTriggered, logAudit } from '../core/audit';
 import { sessionLocalStorage } from '../core/session';
-import { getSessionTaint } from '../core/taint';
+import { getSessionTaint, scanAndTaint, taintSession } from '../core/taint';
 import { requestApproval } from '../core/approval';
 
 export async function getVaultPath(): Promise<string> {
@@ -270,18 +270,27 @@ export const recallTool = tool({
       
       matches.sort((a, b) => b.score - a.score);
       
-      const resultsText = matches.slice(0, 5).map(m => {
-        const contentPreview = m.content.length > 1000 
-          ? m.content.substring(0, 1000) + '\n\n[...content truncated]' 
+      const surfaced = matches.slice(0, 5);
+      const resultsText = surfaced.map(m => {
+        const contentPreview = m.content.length > 1000
+          ? m.content.substring(0, 1000) + '\n\n[...content truncated]'
           : m.content;
-          
-        const trustPrefix = m.untrusted 
+
+        const trustPrefix = m.untrusted
           ? `⚠️ [WARNING: UNTRUSTED/QUARANTINED NOTE]\n`
           : `✅ [VERIFIED NOTE]\n`;
-          
+
         return `--- Note: ${m.path} ---\n${trustPrefix}${contentPreview}\n`;
       }).join('\n');
-      
+
+      // Vault notes are persistent memory replayed back into the model — treat as
+      // external DATA (§9.4) and watch for memory poisoning (§9.7): scan for injection
+      // patterns, and taint outright if a quarantined (untrusted) note was surfaced.
+      scanAndTaint(sessionId, `recall:${query}`, resultsText);
+      if (surfaced.some(m => m.untrusted)) {
+        taintSession(sessionId, `recall surfaced quarantined (untrusted) note(s) for query "${query}"`);
+      }
+
       return resultsText;
     } catch (err: any) {
       return `Error in recall tool: ${err.message}`;

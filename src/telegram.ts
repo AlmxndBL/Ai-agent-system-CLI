@@ -7,11 +7,15 @@ import { getSecret, initSecretBroker } from './core/secrets';
 import { loadSession, sessionLocalStorage } from './core/session';
 import { runAgent } from './core/agent';
 import { setApprovalHandler } from './core/approval';
-import { isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch } from './core/audit';
+import { isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch, verifyAuditChain, logAudit } from './core/audit';
 import { getSessionTaint, clearTaint } from './core/taint';
+import { assertLowPrivilege } from './core/hardening';
+import { getProviderName, getModelId, parseProviderName, checkProviderReady, PROVIDERS } from './core/providers';
 
 // Initialize Secret Broker immediately to cleanse process.env
 initSecretBroker();
+// Refuse/warn if the daemon is running with elevated privileges (§9.5)
+assertLowPrivilege();
 
 const telegramToken = getSecret('TELEGRAM_TOKEN');
 const ownerId = getSecret('OWNER_TELEGRAM_ID');
@@ -44,8 +48,26 @@ function chunkResponse(text: string, maxLimit = 3500): string[] {
   return chunks;
 }
 
-// Global resolve handler for wait approval loops
-let pendingApprovalResolve: ((value: boolean) => void) | null = null;
+// Pending out-of-band approvals, keyed by chat id. Keying per chat (instead of a
+// single global) means concurrent chats never clobber each other's approval, every
+// promise always settles (so the per-session lock is never held forever), and a typed
+// TOTP code can only ever answer the request from the SAME chat that was asked.
+interface PendingApproval {
+  resolve: (value: boolean) => void;
+  timer: NodeJS.Timeout;
+}
+const pendingApprovals = new Map<number, PendingApproval>();
+
+// Settle the pending approval for a chat exactly once (clears its timer + resolves).
+// Returns false if there was nothing pending (e.g. it already timed out).
+function settlePending(chatId: number, value: boolean): boolean {
+  const pending = pendingApprovals.get(chatId);
+  if (!pending) return false;
+  pendingApprovals.delete(chatId);
+  clearTimeout(pending.timer);
+  pending.resolve(value);
+  return true;
+}
 
 // Custom out-of-band Telegram TOTP approval handler
 setApprovalHandler((toolName, args) => {
@@ -55,14 +77,19 @@ setApprovalHandler((toolName, args) => {
       resolve(false);
       return;
     }
-    
+    const chatId = store.telegramChatId;
+
     try {
+      // Supersede any still-pending approval for this chat so its promise settles
+      // (deny) and no earlier runAgent is left awaiting with the session lock held.
+      settlePending(chatId, false);
+
       const taintWarning = args.tainted
         ? `⚠️ **[WARNING: TAINTED CONTEXT DETECTED]**\nReasons:\n${args.reasons.map((r: string) => `- ${r}`).join('\n')}\n`
         : '';
-        
+
       await bot.telegram.sendMessage(
-        store.telegramChatId,
+        chatId,
         `⚠️ **[Approval Required]**\n` +
         taintWarning +
         `**Action**: \`${toolName}\`\n` +
@@ -70,18 +97,19 @@ setApprovalHandler((toolName, args) => {
         `\`\`\`json\n${JSON.stringify(args, null, 2).substring(0, 1500)}\n\`\`\`\n` +
         `🔓 Enter the 6-digit TOTP code from your Authenticator app within 60 seconds to authorize:`
       );
-      
-      pendingApprovalResolve = resolve;
-      
-      // Auto timeout after 60s
-      setTimeout(() => {
-        if (pendingApprovalResolve === resolve) {
-          bot.telegram.sendMessage(store.telegramChatId!, '⏳ **Approval request timed out.** Action denied.').catch(() => {});
-          pendingApprovalResolve = null;
+
+      // Auto timeout after 60s — only fires if this exact request is still pending.
+      const timer = setTimeout(() => {
+        if (pendingApprovals.get(chatId)?.resolve === resolve) {
+          pendingApprovals.delete(chatId);
+          bot.telegram.sendMessage(chatId, '⏳ **Approval request timed out.** Action denied.').catch(() => {});
           resolve(false);
         }
       }, 60000);
+
+      pendingApprovals.set(chatId, { resolve, timer });
     } catch (err: any) {
+      pendingApprovals.delete(chatId);
       console.error('Error in Telegram approval handler:', err);
       resolve(false);
     }
@@ -91,7 +119,7 @@ setApprovalHandler((toolName, args) => {
 // Middleware to enforce owner-only check
 bot.use(async (ctx, next) => {
   if (ctx.from?.id.toString() !== ownerId) {
-    console.log(`Unauthorized access attempt by Discord ID: ${ctx.from?.id}`);
+    console.log(`Unauthorized access attempt by Telegram ID: ${ctx.from?.id}`);
     return; // Ignore silently
   }
   return next();
@@ -150,6 +178,37 @@ bot.command('clear_taint', async (ctx) => {
   await ctx.reply('🧹 Session taint memory cleared.');
 });
 
+bot.command('verify_audit', async (ctx) => {
+  const res = await verifyAuditChain();
+  if (res.valid) {
+    await ctx.reply(`🔒 **Audit chain intact.** ${res.entries} entr${res.entries === 1 ? 'y' : 'ies'} verified.`);
+  } else {
+    await ctx.reply(`🚨 **AUDIT CHAIN TAMPERED!**\n• Broken at line: \`${res.brokenAtIndex}\`\n• Reason: ${res.reason}`);
+  }
+});
+
+bot.command('model', async (ctx) => {
+  const arg = ctx.message.text.trim().split(/\s+/)[1];
+  if (!arg) {
+    const current = getProviderName();
+    await ctx.reply(`🧠 **Model provider**: \`${current}\` (${getModelId(current)})\nAvailable: ${PROVIDERS.map(p => `\`${p}\``).join(', ')}\nSwitch with /model <name>.`);
+    return;
+  }
+  const target = parseProviderName(arg);
+  if (!target) {
+    await ctx.reply(`❌ Unknown provider \`${arg}\`. Available: ${PROVIDERS.map(p => `\`${p}\``).join(', ')}.`);
+    return;
+  }
+  const notReady = checkProviderReady(target);
+  if (notReady) {
+    await ctx.reply(`❌ Cannot switch to \`${target}\` — ${notReady}.`);
+    return;
+  }
+  process.env.MODEL_PROVIDER = target;
+  await logAudit(`telegram-${ctx.chat.id}`, 'model_switch', { provider: target });
+  await ctx.reply(`✅ **Model provider switched to** \`${target}\` (${getModelId(target)}).`);
+});
+
 // 2. Normal Message Processing Loop
 bot.on('text', async (ctx) => {
   const content = ctx.message.text.trim();
@@ -157,18 +216,16 @@ bot.on('text', async (ctx) => {
   // Skip commands since they are handled separately
   if (content.startsWith('/')) return;
   
-  // Check if we are waiting for TOTP verification code
-  if (pendingApprovalResolve && /^\d{6}$/.test(content)) {
-    const code = content;
-    const resolve = pendingApprovalResolve;
-    pendingApprovalResolve = null;
-    
-    if (verifyTotp(code, totpSecret)) {
-      await ctx.reply('✅ **TOTP code verified.** Action approved.');
-      resolve(true);
-    } else {
-      await ctx.reply('❌ **Invalid TOTP code.** Action denied.');
-      resolve(false);
+  // If THIS chat is awaiting a TOTP approval, a 6-digit message answers that request.
+  if (/^\d{6}$/.test(content) && pendingApprovals.has(ctx.chat.id)) {
+    const ok = verifyTotp(content, totpSecret);
+    // Settle synchronously (clears timer + resolves) before any await, to avoid a
+    // race where the 60s timeout fires mid-reply and double-settles.
+    const settled = settlePending(ctx.chat.id, ok);
+    if (settled) {
+      await ctx.reply(ok
+        ? '✅ **TOTP code verified.** Action approved.'
+        : '❌ **Invalid TOTP code.** Action denied.');
     }
     return;
   }

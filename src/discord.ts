@@ -7,11 +7,15 @@ import { getSecret, initSecretBroker } from './core/secrets';
 import { loadSession, sessionLocalStorage } from './core/session';
 import { runAgent } from './core/agent';
 import { setApprovalHandler } from './core/approval';
-import { isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch } from './core/audit';
+import { isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch, verifyAuditChain, logAudit } from './core/audit';
 import { getSessionTaint, clearTaint } from './core/taint';
+import { assertLowPrivilege } from './core/hardening';
+import { getProviderName, getModelId, parseProviderName, checkProviderReady, PROVIDERS } from './core/providers';
 
 // Initialize Secret Broker immediately to cleanse process.env
 initSecretBroker();
+// Refuse/warn if the daemon is running with elevated privileges (§9.5)
+assertLowPrivilege();
 
 const discordToken = getSecret('DISCORD_TOKEN');
 const ownerId = getSecret('OWNER_DISCORD_ID');
@@ -68,6 +72,11 @@ client.once('ready', () => {
   }, 5000);
 });
 
+// Channels currently waiting for a TOTP code via an approval collector.
+// While a channel is in this set, the messageCreate loop must NOT treat an
+// incoming 6-digit code as a fresh agent prompt (the collector consumes it).
+const channelsAwaitingTotp = new Set<string>();
+
 // Custom out-of-band Discord TOTP approval handler
 setApprovalHandler((toolName, args) => {
   return new Promise<boolean>(async (resolve) => {
@@ -77,13 +86,16 @@ setApprovalHandler((toolName, args) => {
       resolve(false);
       return;
     }
-    
+
+    const channelId = store.discordChannelId;
     try {
-      const channel: any = await client.channels.fetch(store.discordChannelId);
+      const channel: any = await client.channels.fetch(channelId);
       if (!channel || !channel.isTextBased()) {
         resolve(false);
         return;
       }
+
+      channelsAwaitingTotp.add(channelId);
       
       const taintWarning = args.tainted
         ? `⚠️ **[WARNING: TAINTED CONTEXT DETECTED]**\nReasons:\n${args.reasons.map((r: string) => `- ${r}`).join('\n')}\n`
@@ -105,30 +117,34 @@ setApprovalHandler((toolName, args) => {
         max: 1
       });
       
-      let verified = false;
-      
+      // Guarantee the approval promise settles exactly once. Resolve BEFORE awaiting
+      // any reply so a Discord API error on m.reply()/channel.send() can never leave
+      // runAgent awaiting forever (which would hold the session lock).
+      let settled = false;
+      const finish = (value: boolean) => {
+        if (settled) return;
+        settled = true;
+        channelsAwaitingTotp.delete(channelId);
+        resolve(value);
+      };
+
       collector.on('collect', async (m: Message) => {
-        const code = m.content.trim();
-        if (verifyTotp(code, totpSecret)) {
-          verified = true;
-          await m.reply('✅ **TOTP code verified.** Action approved.');
-          collector.stop('approved');
-          resolve(true);
-        } else {
-          verified = true;
-          await m.reply('❌ **Invalid TOTP code.** Action denied.');
-          collector.stop('denied');
-          resolve(false);
-        }
+        const ok = verifyTotp(m.content.trim(), totpSecret);
+        collector.stop(ok ? 'approved' : 'denied');
+        finish(ok);
+        await m.reply(ok
+          ? '✅ **TOTP code verified.** Action approved.'
+          : '❌ **Invalid TOTP code.** Action denied.').catch(() => {});
       });
-      
-      collector.on('end', async (_collected: any, _reason: string) => {
-        if (!verified) {
-          await channel.send('⏳ **Approval request timed out.** Action denied.');
-          resolve(false);
+
+      collector.on('end', async () => {
+        if (!settled) {
+          await channel.send('⏳ **Approval request timed out.** Action denied.').catch(() => {});
+          finish(false);
         }
       });
     } catch (err: any) {
+      channelsAwaitingTotp.delete(channelId);
       console.error('Error in Discord approval handler:', err);
       resolve(false);
     }
@@ -140,7 +156,13 @@ client.on('messageCreate', async (msg) => {
   if (msg.author.id !== ownerId || msg.author.bot) return;
   
   const content = msg.content.trim();
-  
+
+  // If an approval collector is waiting on this channel, let it consume the
+  // 6-digit TOTP code instead of dispatching it as a new agent prompt.
+  if (channelsAwaitingTotp.has(msg.channel.id) && /^\d{6}$/.test(content)) {
+    return;
+  }
+
   // 1. Handle Admin / Security Commands
   if (content === '!panic') {
     await triggerKillSwitch(`discord-${msg.channel.id}`, 'Manual panic command triggered by owner via Discord.');
@@ -176,6 +198,39 @@ client.on('messageCreate', async (msg) => {
   if (content === '!clear-taint') {
     clearTaint(`discord-${msg.channel.id}`);
     await msg.reply('🧹 Session taint memory cleared.');
+    return;
+  }
+
+  if (content === '!verify-audit') {
+    const res = await verifyAuditChain();
+    if (res.valid) {
+      await msg.reply(`🔒 **Audit chain intact.** ${res.entries} entr${res.entries === 1 ? 'y' : 'ies'} verified.`);
+    } else {
+      await msg.reply(`🚨 **AUDIT CHAIN TAMPERED!**\n• Broken at line: \`${res.brokenAtIndex}\`\n• Reason: ${res.reason}`);
+    }
+    return;
+  }
+
+  if (content === '!model' || content.startsWith('!model ')) {
+    const arg = content.slice('!model'.length).trim();
+    if (!arg) {
+      const current = getProviderName();
+      await msg.reply(`🧠 **Model provider**: \`${current}\` (${getModelId(current)})\nAvailable: ${PROVIDERS.map(p => `\`${p}\``).join(', ')}\nSwitch with \`!model <name>\`.`);
+      return;
+    }
+    const target = parseProviderName(arg);
+    if (!target) {
+      await msg.reply(`❌ Unknown provider \`${arg}\`. Available: ${PROVIDERS.map(p => `\`${p}\``).join(', ')}.`);
+      return;
+    }
+    const notReady = checkProviderReady(target);
+    if (notReady) {
+      await msg.reply(`❌ Cannot switch to \`${target}\` — ${notReady}.`);
+      return;
+    }
+    process.env.MODEL_PROVIDER = target;
+    await logAudit(`discord-${msg.channel.id}`, 'model_switch', { provider: target });
+    await msg.reply(`✅ **Model provider switched to** \`${target}\` (${getModelId(target)}).`);
     return;
   }
   
