@@ -1,8 +1,19 @@
 # System Design — Personal AI Coding Agent
 
-> AI coding agent ที่รันในเครื่อง (local-first) · จำงานข้าม session · เก็บความรู้เป็น knowledge graph ใน Obsidian · รับคำสั่งผ่าน Discord bot · เรียกไฟล์และจัดการเครื่องได้
+> AI coding agent ที่รันในเครื่อง (local-first) · จำงานข้าม session · เก็บความรู้เป็น knowledge graph ใน Obsidian · รับคำสั่งผ่าน Telegram bot · เรียกไฟล์และจัดการเครื่องได้
 >
-> เวอร์ชันเอกสาร: **v1.1** · Stack: TypeScript + Vercel AI SDK + Ollama + discord.js + Obsidian vault
+> เวอร์ชันเอกสาร: **v3.1** · Stack: TypeScript + Vercel AI SDK + Telegraf + Obsidian vault
+>
+> **Changelog v3.1 (Phase 3, 4, 5 - Complete Integration):** สำเร็จการพัฒนาระบบความปลอดภัยและการเชื่อมต่อระยะไกลอย่างสมบูรณ์แบบ:
+> - **Secret Broker & Taint Tracking**: แยก API Keys ออกจาก process.env และเซนเซอร์ข้อมูลความลับจาก Log/Output, พร้อมระบบตรวจจับ Taint ของข้อมูลนำเข้าเพื่อบังคับใช้งานการยืนยันตัวตน 2FA
+> - **Hash-chained Audit Logs & Kill Switch**: เพิ่มระบบ Audit Log แบบต่อรหัสผ่านแบบสายโซ่ และระบบ Kill Switch ฉุกเฉินเมื่อเกิดเหตุภัยคุกคาม
+> - **Telegram Bot Gateway & Out-of-band TOTP**: พัฒนาระบบบอทรับคำสั่งจาก Telegram โดยมีการคุมสิทธิ์ Owner และการยืนยันสิทธิ์ Mutate ผ่านรหัส 2FA TOTP (Google Authenticator)
+> - **Supervisor Watchdog**: เพิ่มตัวควบคุม Daemon ด้วย Heartbeat และการกู้คืนระบบจากการแครชแบบอัตโนมัติ (Exponential Backoff)
+> - **Context Compaction**: ระบบบีบอัดบทสนทนาอัจฉริยะเมื่อโทเค็นเต็มโดยใช้ LLM และรักษาความถูกต้องของ Tool Call/Result
+>
+> **Changelog v2.0 (Phase 2 - Knowledge Graph):** สำเร็จ Phase 2 ปรับระบบความจำแบบ Graph และเชื่อมต่อ Obsidian vault (ผ่าน remember และ recall tools) พร้อมตั้งค่าให้ DeepSeek เป็นโมเดลหลักเริ่มต้น โดยรองรับระบบสลับโมเดลอื่น ๆ ได้ในระดับโครงสร้าง
+>
+> **Changelog v1.2 (model adjustments):** ระงับการใช้งาน Google Gemini ชั่วคราวเนื่องจากปัญหาเครดิตบัญชีหมดอายุ ย้ายโมเดลตั้งต้นหลัก (default) ไปใช้ DeepSeek (API) และเพิ่มการรองรับ Anthropic Claude เป็นโมเดลทางเลือก
 >
 > **Changelog v1.1 (security hardening pass):** ปิดช่องโหว่เชิงตรรกะของ approval gate (เพิ่ม out-of-band 2nd factor), ยกระดับ §9 เป็น OS-level isolation + defense-in-depth (assume-breach), เพิ่ม audit log / kill-switch / memory-poisoning defense, แก้บั๊กสถาปัตยกรรม (per-session lock, compaction pairing, per-model token window, secret redaction), และจัด roadmap ให้ของ critical มาก่อน remote — ดู §9, §10, §12
 
