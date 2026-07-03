@@ -5,7 +5,7 @@ import { promisify } from 'util';
 import { tool } from 'ai';
 import { z } from 'zod';
 import * as os from 'os';
-import { validatePath } from './index';
+import { validatePath, assertNoSymlinkEscape } from './index';
 import { requestApproval } from '../core/approval';
 import { sessionLocalStorage } from '../core/session';
 import { logAudit, isKillSwitchTriggered } from '../core/audit';
@@ -119,7 +119,10 @@ export const writeFileTool = tool({
         return 'Error: Action blocked by kill switch.';
       }
       
-      const target = await validatePath(userPath);
+      // Early containment check so an obviously out-of-scope path is rejected before
+      // we bother the user with an approval prompt; the authoritative check is the
+      // re-validation done after approval, immediately before the write.
+      await validatePath(userPath);
       const taint = getSessionTaint(sessionId);
       
       // Request User Approval
@@ -135,10 +138,16 @@ export const writeFileTool = tool({
       if (!approved) {
         return 'Error: Action denied by user.';
       }
-      
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, content, 'utf8');
-      
+
+      // Re-validate AFTER approval to close the TOCTOU window (the approval wait can
+      // last minutes) and reject any path component that is now a symlink, so a
+      // swapped-in symlink can't redirect the write outside the workspace (§T5).
+      const safeTarget = await validatePath(userPath);
+      await assertNoSymlinkEscape(path.dirname(safeTarget));
+      await fs.mkdir(path.dirname(safeTarget), { recursive: true });
+      await assertNoSymlinkEscape(safeTarget);
+      await fs.writeFile(safeTarget, content, 'utf8');
+
       await logAudit(sessionId, 'write_file_success', { path: userPath, size: content.length });
       return `Successfully wrote file: ${userPath}`;
     } catch (err: any) {
@@ -163,7 +172,10 @@ export const editFileTool = tool({
         return 'Error: Action blocked by kill switch.';
       }
       
-      const target = await validatePath(userPath);
+      // Early containment check so an obviously out-of-scope path is rejected before
+      // we bother the user with an approval prompt; the authoritative check is the
+      // re-validation done after approval, immediately before the write.
+      await validatePath(userPath);
       const taint = getSessionTaint(sessionId);
       
       // Request User Approval
@@ -180,9 +192,13 @@ export const editFileTool = tool({
       if (!approved) {
         return 'Error: Action denied by user.';
       }
-      
-      const content = await fs.readFile(target, 'utf8');
-      
+
+      // Re-validate AFTER approval and reject symlinked components before touching
+      // the file, closing the TOCTOU window opened by the approval wait (§T5).
+      const safeTarget = await validatePath(userPath);
+      await assertNoSymlinkEscape(safeTarget);
+      const content = await fs.readFile(safeTarget, 'utf8');
+
       const occurrences = content.split(old).length - 1;
       if (occurrences === 0) {
         return `Error: Could not find the precise 'old' block inside the file. Match must be exact (including whitespace).`;
@@ -190,10 +206,11 @@ export const editFileTool = tool({
       if (occurrences > 1) {
         return `Error: Found multiple occurrences (${occurrences}) of the 'old' block. Make your 'old' block more specific to target a single location.`;
       }
-      
+
       const updated = content.replace(old, newContent);
-      await fs.writeFile(target, updated, 'utf8');
-      
+      await assertNoSymlinkEscape(safeTarget);
+      await fs.writeFile(safeTarget, updated, 'utf8');
+
       await logAudit(sessionId, 'edit_file_success', { path: userPath });
       return `Successfully edited file: ${userPath}`;
     } catch (err: any) {

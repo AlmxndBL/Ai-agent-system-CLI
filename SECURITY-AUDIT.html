@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>รายงานตรวจสอบความปลอดภัย — AI Agent System CLI</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --border:#30363d;
+    --text:#e6edf3; --muted:#9198a1; --accent:#58a6ff; --accent2:#7ee787;
+    --crit:#f85149; --high:#ff7b72; --med:#e3b341; --low:#79c0ff; --info:#8b949e;
+    --ok:#3fb950; --fixed:#2ea043;
+    --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans Thai',Tahoma,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.7;font-size:16px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 96px}
+  header.hero{padding:56px 0 32px;border-bottom:1px solid var(--border);margin-bottom:8px}
+  .eyebrow{color:var(--accent2);font-family:var(--mono);font-size:13px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 10px}
+  h1{font-size:34px;line-height:1.25;margin:0 0 14px;font-weight:750}
+  .sub{color:var(--muted);font-size:16px;max-width:760px}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .chip{background:var(--panel);border:1px solid var(--border);border-radius:999px;padding:5px 14px;font-size:13px;color:var(--muted);font-family:var(--mono)}
+  .chip b{color:var(--text)}
+  h2{font-size:24px;margin:52px 0 16px;padding-top:14px;font-weight:720;scroll-margin-top:20px}
+  h2 .num{color:var(--accent);font-family:var(--mono);font-size:18px;margin-inline-end:10px}
+  h3{font-size:18px;margin:30px 0 10px;font-weight:680}
+  p{margin:12px 0}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.86em;background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 6px}
+  .toc{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:22px 26px;margin:26px 0}
+  .toc ol{margin:0;padding-inline-start:22px;columns:2;column-gap:40px}
+  .toc li{margin:7px 0;break-inside:avoid}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:22px 0}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 20px;text-align:center}
+  .card .n{font-size:34px;font-weight:800;font-family:var(--mono);line-height:1}
+  .card .l{color:var(--muted);font-size:12.5px;margin-top:8px;text-transform:uppercase;letter-spacing:.04em}
+  .badge{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:6px;letter-spacing:.03em;vertical-align:middle;white-space:nowrap}
+  .b-crit{background:rgba(248,81,73,.16);color:var(--crit);border:1px solid rgba(248,81,73,.4)}
+  .b-high{background:rgba(255,123,114,.14);color:var(--high);border:1px solid rgba(255,123,114,.38)}
+  .b-med{background:rgba(227,179,65,.14);color:var(--med);border:1px solid rgba(227,179,65,.38)}
+  .b-low{background:rgba(121,192,255,.12);color:var(--low);border:1px solid rgba(121,192,255,.34)}
+  .b-fixed{background:rgba(46,160,67,.16);color:#56d364;border:1px solid rgba(46,160,67,.45)}
+  .b-open{background:rgba(139,148,158,.14);color:var(--info);border:1px solid rgba(139,148,158,.35)}
+  .b-part{background:rgba(88,166,255,.12);color:var(--accent);border:1px solid rgba(88,166,255,.34)}
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:14.5px}
+  th,td{text-align:start;padding:11px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-size:12.5px;text-transform:uppercase;letter-spacing:.04em;font-weight:650}
+  tbody tr:hover{background:var(--panel)}
+  .finding{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px 24px;margin:18px 0;border-inline-start:4px solid var(--border)}
+  .finding.f-high{border-inline-start-color:var(--high)}
+  .finding.f-med{border-inline-start-color:var(--med)}
+  .finding.f-low{border-inline-start-color:var(--low)}
+  .finding h3{margin-top:4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .finding .id{font-family:var(--mono);color:var(--accent);font-weight:700}
+  .kv{margin:10px 0 4px;font-size:14px;color:var(--muted)}
+  .kv b{color:var(--text);font-weight:600}
+  pre{background:#0a0e14;border:1px solid var(--border);border-radius:10px;padding:15px 17px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.6;margin:12px 0}
+  pre .del{color:#ff7b72;display:block}
+  pre .add{color:#7ee787;display:block}
+  pre .cmt{color:#6e7681}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}.toc ol{columns:1}h1{font-size:27px}}
+  .callout{background:var(--panel2);border:1px solid var(--border);border-inline-start:4px solid var(--accent);border-radius:10px;padding:14px 18px;margin:16px 0}
+  .callout.good{border-inline-start-color:var(--ok)}
+  .callout.warn{border-inline-start-color:var(--med)}
+  .pill{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  ul.tight li{margin:6px 0}
+  .foot{margin-top:60px;padding-top:24px;border-top:1px solid var(--border);color:var(--muted);font-size:13.5px}
+  .sec-status{font-size:13px;color:var(--muted);margin-top:-6px}
+  .tag{font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 7px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <p class="eyebrow">Security &amp; Quality Audit Report</p>
+  <h1>รายงานตรวจสอบความปลอดภัยและปรับปรุงระบบ<br>AI Agent System CLI</h1>
+  <p class="sub">ตรวจสอบโค้ดจริงทั้งหมด 18 ไฟล์ (~2,950 บรรทัด) ครอบคลุมการรันคำสั่ง, การอนุมัติผ่าน Telegram/Discord แบบ 2FA, secret broker, taint tracking, audit log และ supervisor daemon — พร้อมลงมือแก้ช่องโหว่ระดับสูง, เสนอฟีเจอร์ใหม่ และวางแผนการทดสอบ</p>
+  <div class="meta">
+    <span class="chip">โปรเจค: <b>ai-agent-system-cli</b> v1.0.0</span>
+    <span class="chip">วันที่: <b>3 ก.ค. 2026</b></span>
+    <span class="chip">Branch: <b>dev</b></span>
+    <span class="chip">วิธีตรวจ: <b>อ่านโค้ดตรง + multi-agent adversarial review</b></span>
+  </div>
+</header>
+
+<div class="toc">
+  <strong>สารบัญ</strong>
+  <ol>
+    <li><a href="#exec">บทสรุปผู้บริหาร</a></li>
+    <li><a href="#arch">สถาปัตยกรรม &amp; Threat Model</a></li>
+    <li><a href="#findings">สรุปช่องโหว่ทั้งหมด (จัดอันดับ)</a></li>
+    <li><a href="#fixed">สิ่งที่แก้ไขแล้วในรอบนี้</a></li>
+    <li><a href="#details">รายละเอียดช่องโหว่ที่ยังเหลือ</a></li>
+    <li><a href="#features">ข้อเสนอ Function / Feature ใหม่</a></li>
+    <li><a href="#testing">แผนการทดสอบ (Testing Strategy)</a></li>
+    <li><a href="#hardening">ช่องว่างการ Deploy Hardening</a></li>
+    <li><a href="#verify">วิธีตรวจสอบผลลัพธ์</a></li>
+  </ol>
+</div>
+
+<!-- ============ 1. EXEC SUMMARY ============ -->
+<h2 id="exec"><span class="num">1</span>บทสรุปผู้บริหาร</h2>
+<p>โปรเจคนี้ <b>ออกแบบด้านความปลอดภัยมาดีเกินระดับทั่วไปมาก</b> — ทุกการกระทำที่แก้ไขระบบ (write/edit/run_bash) ต้องผ่าน "approval gate" ที่บังคับใส่รหัส TOTP แบบ out-of-band ทุกครั้ง, มี kill-switch, audit log แบบ hash-chain, การแยก secret ออกจาก environment และการตรวจ path traversal ที่รอบคอบ. จุดแข็งเหล่านี้ทำให้ช่องโหว่จำนวนมากถูกลดความรุนแรงลง เพราะผู้โจมตีต้องผ่านการยืนยันตัวตนของเจ้าของก่อน.</p>
+<p>อย่างไรก็ตาม การตรวจเชิงลึกพบจุดที่ยังต้องแก้ โดยเฉพาะ <b>2 จุดระดับ High</b> ที่ verifier อิสระยืนยันแล้ว และจุดที่กระทบความถูกต้องของ audit log. รอบนี้ได้ <b>ลงมือแก้จุดสำคัญไปแล้ว 3 จุด + เสริมความแข็งแรงอีก 1 จุด</b> พร้อมเพิ่มเทสต์อัตโนมัติ.</p>
+
+<div class="cards">
+  <div class="card"><div class="n" style="color:var(--high)">2</div><div class="l">High</div></div>
+  <div class="card"><div class="n" style="color:var(--med)">8</div><div class="l">Medium</div></div>
+  <div class="card"><div class="n" style="color:var(--low)">8</div><div class="l">Low / คุณภาพ</div></div>
+  <div class="card"><div class="n" style="color:#56d364">4</div><div class="l">แก้แล้วรอบนี้</div></div>
+  <div class="card"><div class="n" style="color:var(--accent)">12</div><div class="l">เทสต์ผ่าน</div></div>
+</div>
+
+<div class="callout good">
+  <b>✅ จุดแข็งที่ตรวจแล้วว่าทำงานจริง:</b>
+  <ul class="tight" style="margin:8px 0 0">
+    <li>Approval gate + TOTP บังคับทุก mutate — ทำให้ prompt injection สั่งเขียนไฟล์/รันคำสั่งเองไม่ได้โดยไม่ผ่านเจ้าของ</li>
+    <li>Path validation กัน <code>../</code> และ sibling-prefix (<code>app-backup</code>) ได้จริง (มี unit test)</li>
+    <li>Secret broker ลบคีย์ออกจาก <code>process.env</code> และ scrub ก่อน spawn subprocess</li>
+    <li>Audit hash-chain ตรวจจับการแก้ไขย้อนหลังได้ + kill-switch/panic ใช้งานได้</li>
+    <li>run_bash ใช้ <code>execFile</code> (ไม่ผ่าน shell) + argv allowlist — กัน shell injection แบบ <code>;</code> <code>&amp;&amp;</code> <code>|</code></li>
+  </ul>
+</div>
+
+<!-- ============ 2. ARCH & THREAT MODEL ============ -->
+<h2 id="arch"><span class="num">2</span>สถาปัตยกรรม &amp; Threat Model</h2>
+<p>ระบบมี entry point 4 ทาง (<code>cli.ts</code> REPL, <code>supervisor.ts</code> daemon, <code>telegram.ts</code>, <code>discord.ts</code>) ที่วิ่งเข้าสู่ loop กลาง <code>core/agent.ts</code> ซึ่งเรียกเครื่องมือ 8 ตัวใน <code>tools/</code> โดยมีชั้นความปลอดภัยใน <code>core/</code> (secrets, audit, taint, totp, hardening, session, approval, providers, compaction).</p>
+<p>เอกสาร <code>ai-agent-system-design.md</code> นิยาม threat model ไว้ 11 ข้อ. ตารางด้านล่างเทียบว่าโค้ด <b>บังคับใช้จริง</b> แค่ไหน:</p>
+
+<table>
+  <thead><tr><th>#</th><th>ภัยคุกคาม</th><th>มาตรการที่ออกแบบ</th><th>สถานะในโค้ด</th></tr></thead>
+  <tbody>
+    <tr><td>T1</td><td>เข้าถึงโดยไม่ได้รับอนุญาต</td><td>Owner-ID gate</td><td><span class="badge b-fixed">บังคับจริง</span></td></tr>
+    <tr><td>T2</td><td>บัญชี Telegram/Discord ถูกยึด</td><td>Out-of-band TOTP</td><td><span class="badge b-fixed">แข็งขึ้นรอบนี้</span> เพิ่ม lockout+replay</td></tr>
+    <tr><td>T3</td><td>Prompt injection</td><td>Taint tracking + approval</td><td><span class="badge b-part">บางส่วน</span> ตรวจ pattern อ่อน</td></tr>
+    <tr><td>T4</td><td>ขโมย secret</td><td>Secret broker + redaction</td><td><span class="badge b-part">บางส่วน</span> scrub แบบ allowlist</td></tr>
+    <tr><td>T5</td><td>Path traversal / symlink</td><td>realpath + reject symlink</td><td><span class="badge b-fixed">แก้ TOCTOU แล้ว</span></td></tr>
+    <tr><td>T6</td><td>คำสั่งอันตราย</td><td>Approval + argv allowlist</td><td><span class="badge b-part">บางส่วน</span> ยังรัน script ของ repo</td></tr>
+    <tr><td>T7</td><td>Supply-chain (<code>npm install</code>)</td><td><code>--ignore-scripts</code> + allowlist</td><td><span class="badge b-fixed">บังคับจริง</span></td></tr>
+    <tr><td>T8</td><td>Egress exfiltration</td><td>OS-level firewall</td><td><span class="badge b-open">เอกสารเท่านั้น</span> ไม่มีในโค้ด</td></tr>
+    <tr><td>T9</td><td>Memory poisoning (vault)</td><td>Quarantine untrusted</td><td><span class="badge b-part">บางส่วน</span> มี tag untrusted</td></tr>
+    <tr><td>T10</td><td>Daemon สิทธิ์สูง</td><td>Low-priv user เฉพาะ</td><td><span class="badge b-part">บางส่วน</span> ตรวจแค่ admin/root</td></tr>
+    <tr><td>T11</td><td>Approval replay</td><td>Nonce / single-use</td><td><span class="badge b-fixed">แก้แล้วรอบนี้</span> replay cache</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 3. FINDINGS TABLE ============ -->
+<h2 id="findings"><span class="num">3</span>สรุปช่องโหว่ทั้งหมด (จัดอันดับตามความรุนแรง)</h2>
+<table>
+  <thead><tr><th>ID</th><th>ระดับ</th><th>หัวข้อ</th><th>ตำแหน่ง</th><th>สถานะ</th></tr></thead>
+  <tbody>
+    <tr><td>H1</td><td><span class="badge b-high">HIGH</span></td><td>TOCTOU / symlink write-escape ออกนอก workspace</td><td><code>tools/mutate.ts</code>, <code>tools/index.ts</code></td><td><span class="badge b-fixed">แก้แล้ว</span></td></tr>
+    <tr><td>H2</td><td><span class="badge b-high">HIGH</span></td><td>TOTP ไม่มี lockout / rate-limit / replay-cache</td><td><code>core/totp.ts</code> + gateway</td><td><span class="badge b-fixed">แก้แล้ว</span></td></tr>
+    <tr><td>M1</td><td><span class="badge b-med">MED</span></td><td>Audit log write race → chain พัง / แจ้งเตือนหลอก</td><td><code>core/audit.ts</code></td><td><span class="badge b-fixed">แก้แล้ว</span></td></tr>
+    <tr><td>M2</td><td><span class="badge b-med">MED</span></td><td>Audit hash chain ไม่ keyed → ปลอมได้</td><td><code>core/audit.ts</code></td><td><span class="badge b-fixed">เสริมแล้ว (HMAC)</span></td></tr>
+    <tr><td>M3</td><td><span class="badge b-med">MED</span></td><td>env scrubbing เป็น allowlist → secret อื่นหลุด</td><td><code>core/secrets.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>M4</td><td><span class="badge b-med">MED</span></td><td>Session lock/permission ไม่ตรงกับที่ออกแบบ</td><td><code>core/session.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>M5</td><td><span class="badge b-med">MED</span></td><td>ไม่มี cost/token budget + rate limiting</td><td><code>core/agent.ts</code> + gateway</td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>M6</td><td><span class="badge b-med">MED</span></td><td>คำสั่งใน allowlist ยังรันโค้ดของ repo (confused deputy)</td><td><code>tools/mutate.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>M7</td><td><span class="badge b-med">MED</span></td><td>Windows <code>.cmd</code> argument injection (ขึ้นกับเวอร์ชัน Node)</td><td><code>tools/mutate.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>M8</td><td><span class="badge b-med">MED</span></td><td>hardening ตรวจแค่ admin/root ไม่ใช่ low-priv user</td><td><code>core/hardening.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L1</td><td><span class="badge b-low">LOW</span></td><td><code>grep</code> อ่านทุกไฟล์ ไม่มี cap ขนาด → DoS</td><td><code>tools/index.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L2</td><td><span class="badge b-low">LOW</span></td><td><code>globToRegex</code> เสี่ยง ReDoS</td><td><code>tools/index.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L3</td><td><span class="badge b-low">LOW</span></td><td>taint pattern อ่อน + อยู่ในหน่วยความจำ</td><td><code>core/taint.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L4</td><td><span class="badge b-low">LOW</span></td><td>Telegram fallback retry ข้อความเดิมที่ fail</td><td><code>telegram.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L5</td><td><span class="badge b-low">LOW</span></td><td><code>/model</code> เขียน env global แชร์ทุกแชต</td><td>gateway</td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L6</td><td><span class="badge b-low">LOW</span></td><td><code>loadSession</code> ไม่ validate schema</td><td><code>core/session.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L7</td><td><span class="badge b-low">LOW</span></td><td>heartbeat file ไม่มี auth → spoof watchdog</td><td>gateway/supervisor</td><td><span class="badge b-open">รอแก้</span></td></tr>
+    <tr><td>L8</td><td><span class="badge b-low">LOW</span></td><td>supervisor <code>spawn(shell:true)</code> บน Windows</td><td><code>supervisor.ts</code></td><td><span class="badge b-open">รอแก้</span></td></tr>
+  </tbody>
+</table>
+<p class="sec-status">รวม 18 finding — ไม่พบระดับ Critical (approval gate ปิดความเสี่ยงส่วนใหญ่ไว้). กระบวนการยังขาด test framework / CI / coverage tooling (ดูหัวข้อ 7).</p>
+
+<!-- ============ 4. FIXED THIS ROUND ============ -->
+<h2 id="fixed"><span class="num">4</span>สิ่งที่แก้ไขแล้วในรอบนี้</h2>
+<p>แก้ไปแล้ว 4 จุด พร้อมเทสต์อัตโนมัติ (<code>src/test-security.ts</code> เพิ่มเป็น 12 เทสต์ ผ่านทั้งหมด, <code>tsc --noEmit</code> สะอาด).</p>
+
+<h3><span class="badge b-high">HIGH</span> H1 — ปิดช่อง TOCTOU / symlink write-escape</h3>
+<p class="kv"><b>ปัญหา:</b> <code>validatePath()</code> ถูกเรียกก่อน <code>requestApproval()</code> ที่บล็อกรอมนุษย์เป็นนาที แล้วค่อยเขียนไฟล์ — ระหว่างนั้นถ้า component ถูกสลับเป็น symlink การเขียนจะหลุดออกนอก workspace. ซ้ำร้าย กรณีไฟล์ยังไม่มี <code>validatePath</code> คืน path แบบ lexical (ไม่เคย canonicalize).</p>
+<p class="kv"><b>วิธีแก้:</b> (1) ให้ <code>validatePath</code> anchor path ที่ยังไม่มีเข้ากับ realpath ของ ancestor จริง; (2) เพิ่ม <code>assertNoSymlinkEscape()</code> ที่ไล่ <code>lstat</code> ทุก component แล้วปฏิเสธถ้าเจอ symlink; (3) เรียก validate + assert <b>ซ้ำหลัง approval</b> ทันทีก่อนเขียนใน <code>write_file</code>/<code>edit_file</code>.</p>
+<pre><span class="cmt">// tools/mutate.ts — writeFileTool (หลังผู้ใช้กด approve)</span>
+<span class="add">+ const safeTarget = await validatePath(userPath);          // re-validate ปิดช่อง TOCTOU</span>
+<span class="add">+ await assertNoSymlinkEscape(path.dirname(safeTarget));    // ปฏิเสธ symlink ในเส้นทาง</span>
+<span class="add">+ await fs.mkdir(path.dirname(safeTarget), { recursive:true });</span>
+<span class="add">+ await assertNoSymlinkEscape(safeTarget);</span>
+<span class="add">+ await fs.writeFile(safeTarget, content, 'utf8');</span></pre>
+<div class="callout good"><b>ยืนยันจริง:</b> ทดสอบด้วย Windows junction แล้ว guard ปฏิเสธถูกต้อง — <code>"escape" is a symlink — refusing to follow it out of the workspace</code>. (หมายเหตุ: ยังเหลือ micro-window เล็กน้อยระดับ OS ที่ต้องปิดสมบูรณ์ด้วย <code>openat</code>-style fd — ระบุไว้เป็นงานต่อยอด)</div>
+
+<h3><span class="badge b-high">HIGH</span> H2 — TOTP: กัน brute-force และ replay</h3>
+<p class="kv"><b>ปัญหา:</b> <code>verifyTotp</code> ไม่จำกัดจำนวนครั้งเดา และรหัสที่ถูกต้องใช้ซ้ำได้ภายในหน้าต่าง ±90 วินาที — จุดนี้คือ "เกราะหลัก" ของ T2 (บัญชีถูกยึด).</p>
+<p class="kv"><b>วิธีแก้:</b> เพิ่มมอดูล <code>core/totp-guard.ts</code>: (1) replay cache — รหัสใช้ได้ครั้งเดียวต่อ time-step; (2) lockout — ผิดครบ 5 ครั้งล็อกพร้อม backoff แบบทวีคูณ (1→2→4… สูงสุด 15 นาที); (3) เทียบรหัสด้วย <code>crypto.timingSafeEqual</code>. เชื่อมเข้ากับทุกจุดที่เรียก TOTP ใน <code>telegram.ts</code>/<code>discord.ts</code> (ทั้ง approval และ <code>/unpanic</code>).</p>
+<pre><span class="cmt">// telegram.ts / discord.ts</span>
+<span class="del">- const ok = verifyTotp(content, totpSecret);</span>
+<span class="add">+ const res = verifyTotpGuarded(`telegram-${chatId}`, content, totpSecret);</span>
+<span class="cmt">//  res.reason = 'locked' | 'replay' | 'invalid' → ตอบผู้ใช้ต่างกัน</span></pre>
+
+<h3><span class="badge b-med">MED</span> M1 — Audit log: กัน race ตอนเขียนพร้อมกัน</h3>
+<p class="kv"><b>ปัญหา:</b> <code>logAudit()</code> อ่าน entry สุดท้าย → คำนวณ index/prevHash → append โดยไม่มี lock. เมื่อ tool หลายตัว/หลายแชตเขียน <code>audit.log</code> พร้อมกัน จะได้ index ซ้ำ → <code>verifyAuditChain</code> แจ้ง "TAMPERED" หลอก.</p>
+<p class="kv"><b>วิธีแก้:</b> serialize ทุก append ด้วย promise-chain ระดับมอดูล ให้เขียนทีละรายการแบบ atomic ต่อโปรเซส.</p>
+<pre><span class="add">+ let writeChain = Promise.resolve();</span>
+<span class="cmt">  export async function logAudit(...) {</span>
+<span class="add">+   const run = writeChain.then(() => appendEntry(sessionId, action, details));</span>
+<span class="add">+   writeChain = run.catch(() => undefined);   // ไม่ให้ error ตัวเดียวค้างทั้งคิว</span>
+<span class="add">+   return run;</span>
+<span class="cmt">  }</span></pre>
+<p class="pill">เทสต์ใหม่: ยิง <code>logAudit</code> 25 ครั้งพร้อมกันด้วย <code>Promise.all</code> แล้ว <code>verifyAuditChain()</code> ยัง valid ครบ 25 รายการ.</p>
+
+<h3><span class="badge b-med">MED</span> M2 — Audit chain: เสริม HMAC keying</h3>
+<p class="kv"><b>ปัญหา:</b> chain ใช้ SHA-256 บน field สาธารณะล้วน → ผู้เขียนไฟล์ได้คำนวณ chain ใหม่ทั้งเส้นหลังแก้ (ปลอมผ่าน verify).</p>
+<p class="kv"><b>วิธีแก้:</b> ถ้าตั้ง <code>AUDIT_HMAC_KEY</code> (ผ่าน secret broker) จะ key chain ด้วย HMAC-SHA256 — ปลอมไม่ได้ถ้าไม่มีคีย์; ถ้าไม่ตั้งจะ fallback เป็น SHA-256 เดิม (backward-compatible). แนะนำตั้งคีย์นี้บน deployment จริง.</p>
+
+<!-- ============ 5. REMAINING DETAILS ============ -->
+<h2 id="details"><span class="num">5</span>รายละเอียดช่องโหว่ที่ยังเหลือ (แนะนำให้แก้ต่อ)</h2>
+
+<div class="finding f-med">
+  <h3><span class="id">M3</span> Secret scrubbing เป็น allowlist ผิดด้าน <span class="badge b-med">MED</span></h3>
+  <p class="kv"><b>ไฟล์:</b> <code>core/secrets.ts:50-56</code> · <b>ประเภท:</b> secret leakage (T4)</p>
+  <p><code>getSafeChildEnv()</code> ลบเฉพาะคีย์ใน <code>SENSITIVE_KEYS</code> ที่ hardcode. Secret อื่นที่มีในเครื่อง (<code>OPENAI_API_KEY</code>, <code>AWS_*</code>, GitHub token ฯลฯ) จะหลุดเข้าสู่ child process ของ run_bash. <b>สถานการณ์:</b> เจ้าของมี <code>AWS_SECRET_ACCESS_KEY</code> ใน environment → agent รัน <code>npm run build</code> ที่มี postbuild อ่าน env → คีย์รั่ว.</p>
+  <p class="kv"><b>แนะนำ:</b> เปลี่ยนเป็น deny-by-default — ส่งเฉพาะ env ที่ allowlist (<code>PATH</code>, <code>HOME</code>, <code>SystemRoot</code>…) ให้ child แทนการ copy ทั้ง <code>process.env</code> แล้วลบทีละคีย์; หรือ regex คลุม <code>*_KEY|*_TOKEN|*_SECRET</code>.</p>
+</div>
+
+<div class="finding f-med">
+  <h3><span class="id">M4</span> Session lock / permission ไม่ตรงกับที่ออกแบบ <span class="badge b-med">MED</span></h3>
+  <p class="kv"><b>ไฟล์:</b> <code>core/session.ts</code> · <b>ประเภท:</b> concurrency + info disclosure</p>
+  <p>เอกสารระบุ "optimistic-lock counter" และ chmod 600 แต่โค้ดมีแค่ lock ในหน่วยความจำ (ไม่มี cross-process), ไม่มี version field, ไม่ตั้ง permission. <b>สถานการณ์:</b> รัน telegram + discord พร้อมกัน (คนละโปรเซส) บนเซสชันเดียว → เขียนไฟล์ทับกัน = lost update; ไฟล์บทสนทนาเต็มถูกเขียนแบบ world-readable (0644) บนเครื่อง multi-user.</p>
+  <p class="kv"><b>แนะนำ:</b> ใช้ file lock ข้ามโปรเซส (เช่น lockfile <code>.lock</code> + <code>O_EXCL</code>), เพิ่ม <code>version</code> ใน session แล้ว compare-and-swap ตอน save, และ <code>fs.writeFile(path, data, { mode: 0o600 })</code>.</p>
+</div>
+
+<div class="finding f-med">
+  <h3><span class="id">M5</span> ไม่มี cost/token budget และ rate limiting <span class="badge b-med">MED</span></h3>
+  <p class="kv"><b>ไฟล์:</b> <code>core/agent.ts</code>, gateway · <b>ประเภท:</b> abuse / cost DoS</p>
+  <p><code>stepCountIs(10)</code> จำกัดแค่จำนวน step ต่อเทิร์น ไม่มีเพดานจำนวนเทิร์นต่อวัน, token, หรือค่าใช้จ่าย API. prompt ที่วนลูปหรือถูกสแปมเผาเครดิตได้เรื่อย ๆ ("rate-limit layer" ในเอกสารไม่มีในโค้ด).</p>
+  <p class="kv"><b>แนะนำ:</b> เพิ่ม budget guard นับ token/ราคาโดยประมาณต่อวัน + จำกัดข้อความต่อนาทีต่อผู้ใช้ + คำสั่ง <code>/budget</code> ดูยอด.</p>
+</div>
+
+<div class="finding f-med">
+  <h3><span class="id">M6</span> คำสั่งใน allowlist ยังรันโค้ดของ repo <span class="badge b-med">MED</span></h3>
+  <p class="kv"><b>ไฟล์:</b> <code>tools/mutate.ts:64-107</code> · <b>ประเภท:</b> confused deputy (T6)</p>
+  <p><code>npm run build</code> / <code>npm test</code> รัน script ใน <code>package.json</code> (โค้ดอะไรก็ได้; <code>--ignore-scripts</code> กันแค่ lifecycle hook ไม่กัน build/test เอง) และ <code>git status/commit</code> ทริกเกอร์ git hook หรือ <code>!</code>-alias ใน <code>.git/config</code> ของ repo ได้. ป๊อปอัพ approval โชว์ "npm run build" ดูไม่มีพิษ แต่รันโค้ดผู้โจมตีถ้า repo ไม่น่าเชื่อถือ.</p>
+  <p class="kv"><b>แนะนำ:</b> ให้ approval prompt แสดง "ผลจริง" เช่น เนื้อหา script ที่จะรัน; พิจารณา <code>git -c core.hooksPath=/dev/null</code> และเตือนเมื่อ repo มี alias แบบ <code>!</code>.</p>
+</div>
+
+<div class="grid2">
+  <div class="finding f-med">
+    <h3><span class="id">M7</span> Windows <code>.cmd</code> injection <span class="badge b-med">MED</span></h3>
+    <p class="kv"><code>tools/mutate.ts:18-25</code></p>
+    <p>เรียก <code>npm.cmd/tsc.cmd/npx.cmd</code> ผ่าน <code>execFile</code>; บน Node ที่ยังไม่แพตช์ (&lt;18.20.2/&lt;20.12.2) args ที่มี metachar หลุดผ่าน cmd.exe ได้. <b>แนะนำ:</b> ตรึงเวอร์ชัน Node ขั้นต่ำใน <code>engines</code> + sanitize args.</p>
+  </div>
+  <div class="finding f-med">
+    <h3><span class="id">M8</span> hardening ตรวจแค่ admin/root <span class="badge b-med">MED</span></h3>
+    <p class="kv"><code>core/hardening.ts</code></p>
+    <p>รันด้วยบัญชีปกติของเจ้าของจะขึ้น "Privilege check OK" ทั้งที่ยังเข้าถึง <code>~/.ssh</code>, browser profile ได้ (เป้า T10). <b>แนะนำ:</b> ตรวจว่าเป็น dedicated service user จริง หรือบังคับ container.</p>
+  </div>
+</div>
+
+<h3>ระดับ Low / คุณภาพโค้ด</h3>
+<ul class="tight">
+  <li><b>L1</b> <code>grep</code> (<code>tools/index.ts</code>) อ่านทุกไฟล์เต็ม ไม่มี cap ขนาด/จำนวน — โมเดลสั่ง DoS ได้. แนะนำ cap ต่อไฟล์ + จำนวนไฟล์รวม.</li>
+  <li><b>L2</b> <code>globToRegex</code> เสี่ยง ReDoS จาก <code>**</code>→<code>.*</code>. แนะนำจำกัดความยาว pattern / ใช้ตัวจับคู่ที่ปลอดภัย.</li>
+  <li><b>L3</b> taint ใช้ 9 สตริงอังกฤษ hardcode เลี่ยงง่าย + หายเมื่อ restart (เป็นแค่ advisory เพราะ approval คือ gate จริง).</li>
+  <li><b>L4</b> Telegram "fallback" retry ข้อความ markdown เดิมที่เพิ่ง fail — ควร strip markdown แล้วส่ง plain.</li>
+  <li><b>L5</b> <code>/model</code> เขียน <code>process.env.MODEL_PROVIDER</code> เป็น global แชร์ทุกแชต — ควรเก็บ provider ระดับเซสชัน.</li>
+  <li><b>L6</b> <code>loadSession</code> <code>JSON.parse</code> ไม่มี schema — ควร validate ด้วย zod.</li>
+  <li><b>L7</b> heartbeat file ไม่มี auth — โปรเซสอื่นในเครื่อง spoof/ลบได้.</li>
+  <li><b>L8</b> supervisor <code>spawn(shell:true)</code> บน Windows — args เป็นภายใน แต่เป็น smell ควรเลี่ยง.</li>
+</ul>
+
+<!-- ============ 6. NEW FEATURES ============ -->
+<h2 id="features"><span class="num">6</span>ข้อเสนอ Function / Feature ใหม่</h2>
+<h3>ด้านความปลอดภัย</h3>
+<table>
+  <thead><tr><th>ฟีเจอร์</th><th>ทำอะไร</th><th>ปิดภัย</th><th>Effort</th></tr></thead>
+  <tbody>
+    <tr><td><b>Egress guard ในแอป</b></td><td>ครอบ <code>fetch</code>/undici ปฏิเสธ host นอก allowlist (deepseek/gemini/telegram/ollama)</td><td>T8</td><td><span class="tag">M</span></td></tr>
+    <tr><td><b>Read-only mode + capability scopes</b></td><td>toggle เปิด/ปิด mutate ต่อเซสชัน, กำหนดสิทธิ์ต่อ tool บังคับในโค้ด (ไม่ใช่แค่เอกสาร)</td><td>T1,T6</td><td><span class="tag">M</span></td></tr>
+    <tr><td><b>Budget / cost guard</b> <code>/budget</code></td><td>นับ token &amp; ราคาต่อวัน, ตัดเมื่อเกิน, จำกัดข้อความต่อนาที</td><td>M5</td><td><span class="tag">M</span></td></tr>
+    <tr><td><b>Audit ship off-box</b></td><td>ส่ง audit log ไป sink append-only (syslog/webhook) แบบ real-time</td><td>M2</td><td><span class="tag">S</span></td></tr>
+    <tr><td><b>Secret rotation + keychain</b></td><td>ต่อ OS keychain/DPAPI แทน .env plaintext + คำสั่ง rotate</td><td>T4</td><td><span class="tag">L</span></td></tr>
+    <tr><td><b>Approval ที่โชว์ผลจริง</b></td><td>แสดงเนื้อหา script/คำสั่งที่จะรันจริงในป๊อปอัพ approval</td><td>M6</td><td><span class="tag">S</span></td></tr>
+  </tbody>
+</table>
+<h3>ด้านความสามารถ</h3>
+<ul class="tight">
+  <li><b>เครื่องมือใหม่:</b> <code>list_dir</code>/<code>tree</code> (ดูโครงสร้าง), <code>apply_patch</code> (แก้หลายไฟล์อะตอมมิก), <code>web_fetch</code> (มี egress guard), <code>run_tests</code> (structured output).</li>
+  <li><b>จัดการเซสชัน:</b> คำสั่ง <code>/new</code> <code>/reset</code> <code>/history</code> + cross-process file lock ให้หลาย gateway ปลอดภัย.</li>
+  <li><b>Semantic retrieval:</b> ใช้ embeddings ค้น vault แทน substring matching ปัจจุบัน (ตรงกับ roadmap Phase 5).</li>
+  <li><b>Streaming ไป Telegram/Discord:</b> ทยอย edit ข้อความแทน buffer จนจบ — ตอบเร็วขึ้นเชิงรับรู้.</li>
+  <li><b>Config validation:</b> ตรวจ <code>.env</code> ด้วย zod ตอน startup แจ้ง error ชัดถ้าตั้งค่าผิด.</li>
+</ul>
+
+<!-- ============ 7. TESTING STRATEGY ============ -->
+<h2 id="testing"><span class="num">7</span>แผนการทดสอบ (Testing Strategy)</h2>
+<p>สถานะปัจจุบัน: มีแค่ <code>src/test-security.ts</code> (harness เขียนเอง) + smoke test ของ provider — <b>ไม่มี test framework, ไม่มี <code>npm test</code>, ไม่มี coverage, ไม่มี CI</b>, coverage ประเมิน ~15–20%. รอบนี้เพิ่มเทสต์ในสไตล์ harness เดิมสำหรับจุดที่แก้ (รวมเป็น 12 เทสต์ ผ่านหมด) และแนะนำเส้นทางยกระดับดังนี้.</p>
+
+<h3>Testing Pyramid ที่แนะนำ</h3>
+<pre>        ╱   E2E   ╲        น้อย — daemon จริง + bot จำลอง (สั่ง→approve→ผลลัพธ์)
+      ╱ Integration ╲      กลาง — agent loop, tool + approval, session I/O
+    ╱   Unit Tests    ╲    เยอะ — allowlist, path, totp, audit, taint, compaction</pre>
+
+<h3>เครื่องมือที่แนะนำ</h3>
+<p><b>Vitest</b> (native TypeScript, เร็ว, มี coverage v8 ในตัว) + สคริปต์ <code>"test": "vitest run --coverage"</code> ใน <code>package.json</code>. ตั้ง coverage gate เริ่มต้นที่ core modules 80%. เพิ่ม <b>GitHub Actions</b> รัน typecheck + test + coverage ทุก push/PR.</p>
+
+<h3>Mapping ต่อมอดูล + coverage target</h3>
+<table>
+  <thead><tr><th>มอดูล</th><th>ชนิดเทสต์</th><th>โฟกัส</th><th>เป้า</th></tr></thead>
+  <tbody>
+    <tr><td><code>tools/mutate.ts</code></td><td>Unit</td><td>allowlist, parseShellCommand, symlink guard</td><td>90%</td></tr>
+    <tr><td><code>tools/index.ts</code></td><td>Unit</td><td>validatePath, isInsideRoot, TOCTOU</td><td>90%</td></tr>
+    <tr><td><code>core/totp*.ts</code></td><td>Unit</td><td>verify, replay, lockout, drift</td><td>95%</td></tr>
+    <tr><td><code>core/audit.ts</code></td><td>Unit</td><td>chain, tamper, concurrency, HMAC</td><td>90%</td></tr>
+    <tr><td><code>core/secrets.ts</code></td><td>Unit</td><td>redaction, env scrub</td><td>90%</td></tr>
+    <tr><td><code>core/compaction.ts</code></td><td>Unit</td><td>split point ไม่แยก tool-call/result</td><td>85%</td></tr>
+    <tr><td><code>core/agent.ts</code></td><td>Integration</td><td>loop + tool mock + kill-switch</td><td>70%</td></tr>
+    <tr><td><code>telegram.ts</code>/<code>discord.ts</code></td><td>Integration</td><td>approval race, owner gate (bot mock)</td><td>60%</td></tr>
+    <tr><td><code>supervisor.ts</code></td><td>Integration</td><td>crash/backoff/heartbeat</td><td>60%</td></tr>
+  </tbody>
+</table>
+
+<h3>ตัวอย่าง Test Case สำคัญ (จุดเสี่ยงสูง)</h3>
+<ul class="tight">
+  <li><code>allowlist_rejects_git_alias</code> — <code>git status</code> ใน repo ที่มี <code>!</code>-alias ต้องถูกเตือน/บล็อก (M6)</li>
+  <li><code>path_toctou_symlink_swap</code> — สลับ parent เป็น symlink หลัง validate → write ต้องถูกปฏิเสธ ✅ (มีแล้ว)</li>
+  <li><code>totp_replay_rejected</code> / <code>totp_lockout_after_5</code> — ✅ (เพิ่มแล้วรอบนี้)</li>
+  <li><code>audit_concurrent_writes_keep_chain_valid</code> — 25 append พร้อมกัน chain ยัง valid ✅ (เพิ่มแล้ว)</li>
+  <li><code>audit_tamper_detected_with_hmac</code> — แก้ entry แล้ว verify ต้อง fail แม้ผู้แก้ recompute (ต้องมี HMAC key)</li>
+  <li><code>secret_not_leaked_to_child</code> / <code>redaction_covers_all_keys</code> — env scrub &amp; redaction</li>
+  <li><code>compaction_never_splits_tool_pair</code> — split point ไม่ตัดกลาง call/result</li>
+  <li><code>owner_gate_blocks_non_owner</code> — ข้อความจาก user id อื่นถูกเมิน</li>
+</ul>
+
+<h3>โครง CI (GitHub Actions)</h3>
+<pre><span class="cmt"># .github/workflows/ci.yml</span>
+name: ci
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test          <span class="cmt"># vitest run --coverage (gate 80%)</span></pre>
+
+<!-- ============ 8. HARDENING GAPS ============ -->
+<h2 id="hardening"><span class="num">8</span>ช่องว่างการ Deploy Hardening</h2>
+<p>เทียบ checklist ใน <code>SETUP-HARDENING.md</code> กับสิ่งที่โค้ดบังคับใช้จริง:</p>
+<table>
+  <thead><tr><th>มาตรการ (เอกสาร)</th><th>สถานะโค้ด</th><th>ช่องว่าง</th></tr></thead>
+  <tbody>
+    <tr><td>รันเป็น low-priv user เฉพาะ</td><td><span class="badge b-part">บางส่วน</span></td><td>ตรวจแค่ admin/root; ควรตรวจ dedicated user จริง (M8)</td></tr>
+    <tr><td>Secret ใน keychain/DPAPI</td><td><span class="badge b-open">เอกสาร</span></td><td>ยังอ่านจาก .env plaintext</td></tr>
+    <tr><td>Egress firewall allowlist</td><td><span class="badge b-open">เอกสาร</span></td><td>ไม่มีการบังคับในแอป (T8)</td></tr>
+    <tr><td>Audit ship off-box</td><td><span class="badge b-open">เอกสาร</span></td><td>เขียน local อย่างเดียว — ควรมี HMAC (✅ เพิ่มแล้ว) + ส่งออก</td></tr>
+    <tr><td>Kill-switch + playbook</td><td><span class="badge b-fixed">มีจริง</span></td><td>ครบ (panic/unpanic ใช้ได้)</td></tr>
+    <tr><td>เริ่มที่ read-only แล้วค่อย ARM</td><td><span class="badge b-open">เอกสาร</span></td><td>ยังไม่มี read-only mode ในโค้ด (เสนอเป็นฟีเจอร์)</td></tr>
+  </tbody>
+</table>
+
+<!-- ============ 9. VERIFY ============ -->
+<h2 id="verify"><span class="num">9</span>วิธีตรวจสอบผลลัพธ์</h2>
+<pre><span class="cmt"># 1) TypeScript ต้องสะอาด (strict + noUnused เปิดอยู่)</span>
+npx tsc --noEmit
+
+<span class="cmt"># 2) ชุดเทสต์ security 12 เทสต์ต้องผ่านทั้งหมด (เดิม 9 + ใหม่ 3)</span>
+npx tsx src/test-security.ts
+
+<span class="cmt"># 3) (แนะนำ) ตั้ง HMAC key ให้ audit chain ปลอมไม่ได้บน production</span>
+export AUDIT_HMAC_KEY=&lt;สุ่ม 32+ ไบต์&gt;</pre>
+<div class="callout good"><b>ผลตรวจปัจจุบัน:</b> <code>tsc --noEmit</code> ผ่าน (exit 0) · เทสต์ทั้ง 12 ผ่าน (🎉 ALL PASSED) · Windows-junction test ยืนยัน symlink guard ปฏิเสธจริง.</div>
+
+<div class="foot">
+  <p>รายงานนี้อ้างอิงการอ่านซอร์สโค้ดโดยตรงทั้ง 18 ไฟล์ ณ branch <code>dev</code> วันที่ 3 ก.ค. 2026. ช่องโหว่ระดับ High และ Medium(M1/M2) ถูกแก้ไขและมีเทสต์รองรับแล้ว; รายการที่เหลือจัดลำดับตามความรุนแรงเพื่อวางแผนแก้รอบถัดไป. ไฟล์ที่แก้: <code>tools/index.ts</code>, <code>tools/mutate.ts</code>, <code>core/totp.ts</code>, <code>core/totp-guard.ts</code> (ใหม่), <code>core/audit.ts</code>, <code>core/secrets.ts</code>, <code>telegram.ts</code>, <code>discord.ts</code>, <code>test-security.ts</code>.</p>
+</div>
+
+</div>
+</body>
+</html>

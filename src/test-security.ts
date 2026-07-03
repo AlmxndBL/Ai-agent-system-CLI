@@ -1,8 +1,9 @@
-import { verifyTotp } from './core/totp';
+import { verifyTotp, generateTotp } from './core/totp';
+import { verifyTotpGuarded, _resetTotpGuard } from './core/totp-guard';
 import { initSecretBroker, getSecret, redactSecrets, getSafeChildEnv } from './core/secrets';
 import { scanAndTaint, getSessionTaint } from './core/taint';
 import { logAudit, isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch, verifyAuditChain } from './core/audit';
-import { validatePath, isInsideRoot } from './tools/index';
+import { validatePath, isInsideRoot, assertNoSymlinkEscape } from './tools/index';
 import { parseShellCommand, validateAndNormalizeCommand } from './tools/mutate';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -287,6 +288,112 @@ async function runTests() {
     console.log('✅ Subprocess Secret Isolation Test Passed');
   } catch (err: any) {
     console.error('❌ Subprocess Secret Isolation Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 10. TOTP Guard: replay + brute-force lockout (§9.3 / T2)
+  try {
+    console.log('\n10. Testing TOTP Guard (replay + lockout)...');
+    _resetTotpGuard();
+
+    // Replay: a valid code must succeed once, then be rejected as single-use.
+    const validCode = generateTotp(MOCK_TOTP_SECRET);
+    const first = verifyTotpGuarded('scope-replay', validCode, MOCK_TOTP_SECRET);
+    if (!first.ok) {
+      throw new Error(`Guard rejected a valid code on first use: ${JSON.stringify(first)}`);
+    }
+    const second = verifyTotpGuarded('scope-replay', validCode, MOCK_TOTP_SECRET);
+    if (second.ok || second.reason !== 'replay') {
+      throw new Error(`Guard failed to block replay of a used code: ${JSON.stringify(second)}`);
+    }
+
+    // Lockout: repeated invalid codes must lock the scope out.
+    _resetTotpGuard();
+    let lastResult = verifyTotpGuarded('scope-lock', '000001', MOCK_TOTP_SECRET);
+    for (let i = 0; i < 4; i++) {
+      lastResult = verifyTotpGuarded('scope-lock', '000001', MOCK_TOTP_SECRET);
+    }
+    if (lastResult.reason !== 'locked') {
+      throw new Error(`Guard did not lock out after repeated failures: ${JSON.stringify(lastResult)}`);
+    }
+    // While locked, even a correct code must be refused.
+    const duringLock = verifyTotpGuarded('scope-lock', generateTotp(MOCK_TOTP_SECRET), MOCK_TOTP_SECRET);
+    if (duringLock.ok || duringLock.reason !== 'locked') {
+      throw new Error(`Guard accepted a code during active lockout: ${JSON.stringify(duringLock)}`);
+    }
+    _resetTotpGuard();
+
+    console.log('✅ TOTP Guard Test Passed');
+  } catch (err: any) {
+    console.error('❌ TOTP Guard Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 11. Audit Log Concurrency (§9.6 — no duplicate index / broken chain under races)
+  try {
+    console.log('\n11. Testing Audit Log Concurrency...');
+    const auditLogPath = path.join(os.homedir(), '.agent', 'audit.log');
+    await fs.unlink(auditLogPath).catch(() => {});
+
+    // Fire many appends at once; without serialization these race on read-then-append
+    // and produce duplicate indexes, which verifyAuditChain would flag as tampering.
+    const N = 25;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) => logAudit('concurrent-session', `action_${i}`, { i }))
+    );
+
+    const res = await verifyAuditChain();
+    if (!res.valid) {
+      throw new Error(`Concurrent appends corrupted the chain: ${JSON.stringify(res)}`);
+    }
+    if (res.entries !== N) {
+      throw new Error(`Expected ${N} entries after concurrent writes, found ${res.entries}`);
+    }
+
+    console.log('✅ Audit Log Concurrency Test Passed');
+  } catch (err: any) {
+    console.error('❌ Audit Log Concurrency Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 12. Symlink-escape guard for writes (§9.5 / T5 — TOCTOU defense)
+  try {
+    console.log('\n12. Testing Symlink-escape Guard...');
+    const cwd = process.cwd();
+
+    // A normal in-scope path must pass without throwing.
+    await assertNoSymlinkEscape(path.join(cwd, 'package.json'));
+
+    const testDir = path.join(cwd, '__toctou_test__');
+    await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+    await fs.mkdir(testDir, { recursive: true });
+    const linkPath = path.join(testDir, 'escape');
+
+    let symlinkCreated = true;
+    try {
+      // Point a component at somewhere outside the workspace.
+      await fs.symlink(os.tmpdir(), linkPath, 'dir');
+    } catch {
+      symlinkCreated = false;
+      console.log('   (skipped symlink assertion — environment cannot create symlinks)');
+    }
+
+    if (symlinkCreated) {
+      let threw = false;
+      try {
+        await assertNoSymlinkEscape(path.join(linkPath, 'pwned.txt'));
+      } catch {
+        threw = true;
+      }
+      if (!threw) {
+        throw new Error('assertNoSymlinkEscape failed to reject a symlinked path component');
+      }
+    }
+
+    await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+    console.log('✅ Symlink-escape Guard Test Passed');
+  } catch (err: any) {
+    console.error('❌ Symlink-escape Guard Test Failed:', err.message);
     passed = false;
   }
 

@@ -14,7 +14,8 @@ const SENSITIVE_KEYS = [
   'TOTP_SECRET',
   'OWNER_DISCORD_ID',
   'TELEGRAM_TOKEN',
-  'OWNER_TELEGRAM_ID'
+  'OWNER_TELEGRAM_ID',
+  'AUDIT_HMAC_KEY'
 ];
 
 const secretStore = new Map<string, string>();

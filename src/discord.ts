@@ -2,7 +2,7 @@ import { Client, GatewayIntentBits, Message } from 'discord.js';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-import { verifyTotp } from './core/totp';
+import { verifyTotpGuarded, GuardedTotpResult } from './core/totp-guard';
 import { getSecret, initSecretBroker } from './core/secrets';
 import { loadSession, sessionLocalStorage } from './core/session';
 import { runAgent } from './core/agent';
@@ -34,6 +34,19 @@ const client = new Client({
     GatewayIntentBits.DirectMessages
   ]
 });
+
+// Human-readable reply for a rejected TOTP attempt (distinguishes lockout / replay
+// / plain-invalid so a locked-out owner understands why their correct code failed).
+function totpDenyReply(res: GuardedTotpResult): string {
+  if (res.reason === 'locked') {
+    const secs = Math.ceil((res.retryAfterMs || 0) / 1000);
+    return `⛔ **Too many invalid codes.** Temporarily locked — try again in ~${secs}s.`;
+  }
+  if (res.reason === 'replay') {
+    return '❌ **That code was already used.** Wait for your Authenticator to show a new one.';
+  }
+  return '❌ **Invalid TOTP code.** Action denied.';
+}
 
 // Helper to chunk long replies for Discord's 2000 character limit
 function chunkResponse(text: string): string[] {
@@ -129,12 +142,12 @@ setApprovalHandler((toolName, args) => {
       };
 
       collector.on('collect', async (m: Message) => {
-        const ok = verifyTotp(m.content.trim(), totpSecret);
-        collector.stop(ok ? 'approved' : 'denied');
-        finish(ok);
-        await m.reply(ok
+        const res = verifyTotpGuarded(`discord-${channelId}`, m.content.trim(), totpSecret);
+        collector.stop(res.ok ? 'approved' : 'denied');
+        finish(res.ok);
+        await m.reply(res.ok
           ? '✅ **TOTP code verified.** Action approved.'
-          : '❌ **Invalid TOTP code.** Action denied.').catch(() => {});
+          : totpDenyReply(res)).catch(() => {});
       });
 
       collector.on('end', async () => {
@@ -172,11 +185,12 @@ client.on('messageCreate', async (msg) => {
   
   if (content.startsWith('!unpanic ')) {
     const code = content.slice(9).trim();
-    if (verifyTotp(code, totpSecret)) {
+    const res = verifyTotpGuarded(`discord-${msg.channel.id}`, code, totpSecret);
+    if (res.ok) {
       await resetKillSwitch(`discord-${msg.channel.id}`);
       await msg.reply('🔓 **Kill switch has been successfully reset.** Mutating actions enabled.');
     } else {
-      await msg.reply('❌ **Invalid TOTP verification code.** Panic state remains active.');
+      await msg.reply(totpDenyReply(res));
     }
     return;
   }

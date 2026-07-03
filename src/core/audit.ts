@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import { getSecret } from './secrets';
 
 export interface AuditEntry {
   index: number;
@@ -21,6 +22,28 @@ async function ensureAgentDir(): Promise<void> {
   await fs.mkdir(AGENT_DIR, { recursive: true });
 }
 
+// Chain integrity primitive. When AUDIT_HMAC_KEY is provisioned (via the secret
+// broker) the chain is keyed with HMAC-SHA256, so an attacker who can write to
+// audit.log cannot forge a passing chain without the key (§9.6 / T-audit-forge).
+// Without a key it degrades to plain SHA-256, which is only tamper-evident against
+// naive edits — set AUDIT_HMAC_KEY on any real deployment. NOTE: switching the key
+// (or turning it on/off) invalidates existing entries; reset the log when you do.
+function computeEntryHash(baseEntry: object): string {
+  const data = JSON.stringify(baseEntry);
+  const key = getSecret('AUDIT_HMAC_KEY');
+  if (key) {
+    return crypto.createHmac('sha256', key).update(data).digest('hex');
+  }
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+// Serializes all appends within this process. logAudit reads the last entry, then
+// appends — two concurrent calls would otherwise both read the same tail and emit a
+// duplicate index / colliding prevHash, corrupting the chain and firing false
+// tamper alarms. Chaining every write behind the previous one makes appends atomic
+// per-process. (Cross-process writers to the same log still need an external lock.)
+let writeChain: Promise<unknown> = Promise.resolve();
+
 // Get the last hash from the audit log to maintain the chain
 async function getLastLogEntry(): Promise<AuditEntry | null> {
   try {
@@ -37,14 +60,14 @@ async function getLastLogEntry(): Promise<AuditEntry | null> {
   }
 }
 
-export async function logAudit(sessionId: string, action: string, details: any): Promise<AuditEntry> {
+async function appendEntry(sessionId: string, action: string, details: any): Promise<AuditEntry> {
   await ensureAgentDir();
-  
+
   const lastEntry = await getLastLogEntry();
   const index = lastEntry ? lastEntry.index + 1 : 0;
   const prevHash = lastEntry ? lastEntry.hash : '0'.repeat(64);
   const timestamp = new Date().toISOString();
-  
+
   // Basic entry before hashing
   const baseEntry = {
     index,
@@ -54,18 +77,15 @@ export async function logAudit(sessionId: string, action: string, details: any):
     details,
     prevHash
   };
-  
-  // Compute SHA-256 hash of the base entry string + prevHash
-  const hash = crypto
-    .createHash('sha256')
-    .update(JSON.stringify(baseEntry))
-    .digest('hex');
-    
+
+  // Compute the chain hash over the base entry (HMAC-keyed when configured).
+  const hash = computeEntryHash(baseEntry);
+
   const entry: AuditEntry = {
     ...baseEntry,
     hash
   };
-  
+
   // Append to audit log and flush (using file handle if we want real fsync, but standard appendFile is durable enough for this CLI)
   const fileHandle = await fs.open(AUDIT_LOG_PATH, 'a');
   try {
@@ -74,8 +94,18 @@ export async function logAudit(sessionId: string, action: string, details: any):
   } finally {
     await fileHandle.close();
   }
-  
+
   return entry;
+}
+
+export async function logAudit(sessionId: string, action: string, details: any): Promise<AuditEntry> {
+  // Queue this append behind any in-flight one so the read-then-append is atomic
+  // per-process (prevents duplicate indexes / colliding prevHash under concurrency).
+  const run = writeChain.then(() => appendEntry(sessionId, action, details));
+  // Keep the chain alive even if this append rejects, so one failure doesn't wedge
+  // every subsequent logAudit call.
+  writeChain = run.catch(() => undefined);
+  return run;
 }
 
 export interface AuditVerifyResult {
@@ -121,7 +151,7 @@ export async function verifyAuditChain(): Promise<AuditVerifyResult> {
       details: entry.details,
       prevHash: entry.prevHash
     };
-    const recomputed = crypto.createHash('sha256').update(JSON.stringify(baseEntry)).digest('hex');
+    const recomputed = computeEntryHash(baseEntry);
 
     if (recomputed !== entry.hash) {
       return { valid: false, entries: lines.length, brokenAtIndex: i, reason: `Entry #${entry.index} hash mismatch — contents were altered` };

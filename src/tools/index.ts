@@ -17,19 +17,25 @@ export function isInsideRoot(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-// realpath the nearest ancestor that actually exists — used to validate the
-// destination of a not-yet-created file (e.g. write_file), so a symlinked
-// parent directory cannot smuggle the write outside the workspace root.
-async function realpathNearestAncestor(p: string): Promise<string> {
+// Walk up from a path until we hit a component that actually exists, realpath THAT
+// (resolving any symlinks in the existing portion), and report the not-yet-existing
+// trailing segments separately. Used to canonicalize the destination of a
+// not-yet-created file so a symlinked ancestor cannot smuggle a write out of root.
+async function resolveExistingAncestor(p: string): Promise<{ realBase: string; tail: string[] }> {
   let current = path.resolve(p);
+  const tail: string[] = [];
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      return await fs.realpath(current);
+      const real = await fs.realpath(current);
+      return { realBase: real, tail: tail.reverse() };
     } catch (err: any) {
       if (err.code === 'ENOENT') {
         const parent = path.dirname(current);
-        if (parent === current) return current; // reached filesystem root
+        if (parent === current) {
+          return { realBase: current, tail: tail.reverse() }; // reached filesystem root
+        }
+        tail.push(path.basename(current));
         current = parent;
         continue;
       }
@@ -38,7 +44,11 @@ async function realpathNearestAncestor(p: string): Promise<string> {
   }
 }
 
-// Helper to validate and restrict paths to current working directory (CWD)
+// Helper to validate and restrict paths to current working directory (CWD).
+// Returns a CANONICAL absolute path: for existing targets the realpath; for
+// not-yet-existing targets, the not-yet-existing tail re-anchored onto the realpath
+// of its nearest existing ancestor (never a bare lexical path). This guarantees the
+// returned path has no unresolved symlinked ancestor at check time.
 export async function validatePath(userPath: string): Promise<string> {
   const cwd = path.resolve(process.cwd());
   const resolved = path.resolve(cwd, userPath);
@@ -57,15 +67,53 @@ export async function validatePath(userPath: string): Promise<string> {
     return real;
   } catch (err: any) {
     if (err.code === 'ENOENT') {
-      // Path does not exist yet — verify the nearest existing ancestor stays
-      // inside the root, so a symlinked parent dir can't escape on write.
-      const realParent = await realpathNearestAncestor(path.dirname(resolved));
-      if (!isInsideRoot(cwd, realParent)) {
+      // Path does not exist yet. Anchor the not-yet-existing tail onto the REAL
+      // (symlink-resolved) path of its nearest existing ancestor, and verify both
+      // that ancestor and the final canonical path stay inside the root.
+      const { realBase, tail } = await resolveExistingAncestor(path.dirname(resolved));
+      if (!isInsideRoot(cwd, realBase)) {
         throw new Error(`Access denied: parent of '${userPath}' resolves outside workspace root`);
       }
-      return resolved;
+      const leaf = path.basename(resolved);
+      const canonical = path.join(realBase, ...tail, leaf);
+      if (!isInsideRoot(cwd, canonical)) {
+        throw new Error(`Access denied: path '${userPath}' is outside workspace root`);
+      }
+      return canonical;
     }
     throw err;
+  }
+}
+
+// Symlink-safe guard called immediately BEFORE a mutating write (§T5). validatePath
+// resolves symlinks at check time, but the write happens later (after a human
+// approval), leaving a TOCTOU window in which a path component could be swapped for
+// a symlink pointing outside the workspace. This walks every component from the
+// workspace root down to `target` and rejects if any existing one is a symlink, so
+// a component swapped in during the approval wait is caught right before the write.
+export async function assertNoSymlinkEscape(target: string): Promise<void> {
+  const cwd = path.resolve(process.cwd());
+  const abs = path.resolve(target);
+  const rel = path.relative(cwd, abs);
+  if (rel !== '' && (rel.startsWith('..') || path.isAbsolute(rel))) {
+    throw new Error('Access denied: path is outside workspace root');
+  }
+  const segments = rel.split(path.sep).filter(Boolean);
+  let current = cwd;
+  for (const seg of segments) {
+    current = path.join(current, seg);
+    try {
+      const st = await fs.lstat(current);
+      if (st.isSymbolicLink()) {
+        throw new Error(`Access denied: '${seg}' is a symlink — refusing to follow it out of the workspace`);
+      }
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        // Nothing exists from here down, so there is no symlink left to follow.
+        return;
+      }
+      throw err;
+    }
   }
 }
 

@@ -2,7 +2,7 @@ import { Telegraf } from 'telegraf';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
-import { verifyTotp } from './core/totp';
+import { verifyTotpGuarded, GuardedTotpResult } from './core/totp-guard';
 import { getSecret, initSecretBroker } from './core/secrets';
 import { loadSession, sessionLocalStorage } from './core/session';
 import { runAgent } from './core/agent';
@@ -27,6 +27,19 @@ if (!telegramToken || !ownerId || !totpSecret) {
 }
 
 const bot = new Telegraf(telegramToken);
+
+// Human-readable reply for a rejected TOTP attempt (distinguishes lockout / replay
+// / plain-invalid so a locked-out owner understands why their correct code failed).
+function totpDenyReply(res: GuardedTotpResult): string {
+  if (res.reason === 'locked') {
+    const secs = Math.ceil((res.retryAfterMs || 0) / 1000);
+    return `⛔ **Too many invalid codes.** Temporarily locked — try again in ~${secs}s.`;
+  }
+  if (res.reason === 'replay') {
+    return '❌ **That code was already used.** Wait for your Authenticator to show a new one.';
+  }
+  return '❌ **Invalid TOTP code.** Action denied.';
+}
 
 // Helper to chunk long replies for Telegram's limits (Telegram limit is 4096)
 function chunkResponse(text: string, maxLimit = 3500): string[] {
@@ -152,11 +165,12 @@ bot.command('unpanic', async (ctx) => {
     return;
   }
   
-  if (verifyTotp(code, totpSecret)) {
+  const res = verifyTotpGuarded(`telegram-${ctx.chat.id}`, code, totpSecret);
+  if (res.ok) {
     await resetKillSwitch(`telegram-${ctx.chat.id}`);
     await ctx.reply('🔓 **Kill switch has been successfully reset.** Mutating actions enabled.');
   } else {
-    await ctx.reply('❌ **Invalid TOTP verification code.** Panic state remains active.');
+    await ctx.reply(totpDenyReply(res));
   }
 });
 
@@ -218,14 +232,14 @@ bot.on('text', async (ctx) => {
   
   // If THIS chat is awaiting a TOTP approval, a 6-digit message answers that request.
   if (/^\d{6}$/.test(content) && pendingApprovals.has(ctx.chat.id)) {
-    const ok = verifyTotp(content, totpSecret);
+    const res = verifyTotpGuarded(`telegram-${ctx.chat.id}`, content, totpSecret);
     // Settle synchronously (clears timer + resolves) before any await, to avoid a
     // race where the 60s timeout fires mid-reply and double-settles.
-    const settled = settlePending(ctx.chat.id, ok);
+    const settled = settlePending(ctx.chat.id, res.ok);
     if (settled) {
-      await ctx.reply(ok
+      await ctx.reply(res.ok
         ? '✅ **TOTP code verified.** Action approved.'
-        : '❌ **Invalid TOTP code.** Action denied.');
+        : totpDenyReply(res));
     }
     return;
   }

@@ -42,11 +42,35 @@ function generateHotp(secret: string, counter: number): string {
   return otp.toString().padStart(6, '0');
 }
 
-export function verifyTotp(token: string, secret: string): boolean {
+// Constant-time string comparison to avoid leaking timing information about how
+// many leading digits of the code matched. Both operands here are fixed-length
+// 6-digit strings, so an equal-length compare is safe.
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(ab, bb);
+}
+
+export interface TotpDetail {
+  valid: boolean;
+  // The time-step counter the code matched (only set when valid). Callers use this
+  // to enforce single-use: a code that already succeeded for its counter must not
+  // be accepted again within its ±1-step validity window.
+  counter?: number;
+}
+
+/**
+ * Verifies a TOTP code and, when valid, reports which time-step counter matched so
+ * the caller can prevent replay. Comparison is constant-time.
+ */
+export function verifyTotpDetailed(token: string, secret: string): TotpDetail {
   try {
     const cleanToken = token.trim();
     if (!/^\d{6}$/.test(cleanToken)) {
-      return false;
+      return { valid: false };
     }
 
     const epoch = Math.floor(Date.now() / 1000);
@@ -54,12 +78,26 @@ export function verifyTotp(token: string, secret: string): boolean {
 
     // Validate with clock drift (+/- 1 step)
     for (let i = -1; i <= 1; i++) {
-      if (generateHotp(secret, counter + i) === cleanToken) {
-        return true;
+      if (timingSafeEqualStr(generateHotp(secret, counter + i), cleanToken)) {
+        return { valid: true, counter: counter + i };
       }
     }
-    return false;
+    return { valid: false };
   } catch {
-    return false;
+    return { valid: false };
   }
+}
+
+export function verifyTotp(token: string, secret: string): boolean {
+  return verifyTotpDetailed(token, secret).valid;
+}
+
+/**
+ * Generates the TOTP code for the current 30-second time-step. Used by the test
+ * suite to exercise the guard, and available for tooling that needs to display the
+ * current code.
+ */
+export function generateTotp(secret: string): string {
+  const counter = Math.floor(Math.floor(Date.now() / 1000) / 30);
+  return generateHotp(secret, counter);
 }
