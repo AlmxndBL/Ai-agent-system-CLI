@@ -83,6 +83,168 @@ export async function getVaultFiles(dir: string): Promise<string[]> {
   }
 }
 
+export interface ObsidianNote {
+  frontmatter: Record<string, any>;
+  title: string;
+  body: string;
+  links: Set<string>;
+  parentLink?: string;
+}
+
+export function parseObsidianNote(fileContent: string, defaultTitle: string): ObsidianNote {
+  const { frontmatter, body } = parseNote(fileContent);
+  
+  // Normalize newlines to LF for parsing simplicity
+  let text = body.replace(/\r\n/g, '\n');
+  
+  // 1. Extract `# Title`
+  let title = defaultTitle;
+  const titleMatch = text.match(/^#\s+(.+)$/m);
+  if (titleMatch) {
+    title = titleMatch[1].trim();
+    // Remove the title line
+    text = text.replace(/^#\s+.+$/m, '');
+  }
+  
+  // 2. Extract `up:: [[...]]`
+  let parentLink: string | undefined;
+  const parentMatch = text.match(/^up::\s*(?:\[\[(.*?)\]\]|(.*?))$/m);
+  if (parentMatch) {
+    parentLink = (parentMatch[1] || parentMatch[2] || '').trim();
+    // Remove the parent line
+    text = text.replace(/^up::\s*(?:\[\[.*?\]\]|.*?)$/m, '');
+  }
+  
+  // 3. Extract `## Links` section
+  const links = new Set<string>();
+  const linksHeaderIdx = text.indexOf('## Links');
+  if (linksHeaderIdx !== -1) {
+    const afterLinks = text.substring(linksHeaderIdx);
+    const lines = afterLinks.split('\n');
+    let linksSectionLength = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (i === 0) {
+        linksSectionLength += lines[i].length + 1;
+        continue;
+      }
+      
+      if (line.startsWith('#') || line.startsWith('up::')) {
+        break;
+      }
+      
+      const linkMatch = line.match(/^-\s*\[\[(.*?)\]\]/) || line.match(/^\[\[(.*?)\]\]/);
+      if (linkMatch) {
+        links.add(linkMatch[1].trim());
+      }
+      
+      if (line.startsWith('-') || line === '') {
+        linksSectionLength += lines[i].length + 1;
+      } else {
+        break;
+      }
+    }
+    
+    text = text.substring(0, linksHeaderIdx) + text.substring(linksHeaderIdx + linksSectionLength);
+  }
+  
+  return {
+    frontmatter,
+    title,
+    body: text.trim(),
+    links,
+    parentLink
+  };
+}
+
+export function serializeObsidianNote(note: ObsidianNote): string {
+  const fm = stringifyFrontmatter(note.frontmatter);
+  
+  const lines: string[] = [];
+  lines.push(fm);
+  lines.push(`# ${note.title}`);
+  lines.push('');
+  if (note.body) {
+    lines.push(note.body);
+    lines.push('');
+  }
+  
+  if (note.links.size > 0) {
+    lines.push('## Links');
+    const sortedLinks = Array.from(note.links)
+      .filter(lnk => lnk !== note.parentLink)
+      .sort();
+    sortedLinks.forEach(lnk => {
+      lines.push(`- [[${lnk}]]`);
+    });
+    lines.push('');
+  }
+  
+  if (note.parentLink) {
+    lines.push(`up:: [[${note.parentLink}]]`);
+  }
+  
+  return lines.join('\n');
+}
+
+export function mergeObsidianNote(
+  existing: ObsidianNote,
+  updateContent: string,
+  incomingLinks: string[],
+  today: string
+): ObsidianNote {
+  let cleanUpdate = updateContent.replace(/\r\n/g, '\n').trim();
+  
+  // Strip starting title matching "# Title"
+  cleanUpdate = cleanUpdate.replace(/^#\s+.*$/m, '').trim();
+  
+  // Strip links section
+  const linksHeaderIdx = cleanUpdate.indexOf('## Links');
+  if (linksHeaderIdx !== -1) {
+    cleanUpdate = cleanUpdate.substring(0, linksHeaderIdx).trim();
+  }
+  
+  // Strip up:: line
+  cleanUpdate = cleanUpdate.replace(/^up::\s*.*$/gm, '').trim();
+  
+  // Merge body
+  let mergedBody = existing.body;
+  if (cleanUpdate) {
+    if (!existing.body.includes(cleanUpdate)) {
+      if (mergedBody) {
+        mergedBody += `\n\n### Updated on ${today}\n${cleanUpdate}`;
+      } else {
+        mergedBody = cleanUpdate;
+      }
+    }
+  }
+  
+  // Merge links
+  const mergedLinks = new Set(existing.links);
+  incomingLinks.forEach(lnk => {
+    let cleanLnk = lnk.trim();
+    if (cleanLnk.startsWith('[[') && cleanLnk.endsWith(']]')) {
+      cleanLnk = cleanLnk.slice(2, -2).trim();
+    }
+    if (cleanLnk) {
+      mergedLinks.add(cleanLnk);
+    }
+  });
+  
+  if (existing.parentLink) {
+    mergedLinks.delete(existing.parentLink);
+  }
+  
+  return {
+    frontmatter: existing.frontmatter,
+    title: existing.title,
+    body: mergedBody,
+    links: mergedLinks,
+    parentLink: existing.parentLink
+  };
+}
+
 export const rememberTool = tool({
   description: 'Save or update a note in the Obsidian Knowledge Graph with links to other notes.',
   inputSchema: z.object({
@@ -107,7 +269,6 @@ export const rememberTool = tool({
       
       const taint = getSessionTaint(sessionId);
       
-      // If session is tainted, remember requires explicit user approval
       if (taint.isTainted) {
         const approved = await requestApproval('remember', {
           folder,
@@ -134,79 +295,63 @@ export const rememberTool = tool({
       
       const today = new Date().toISOString().split('T')[0];
       const typeSingular = folder.toLowerCase().replace(/s$/, '');
-      
-      // Format incoming links as wikilinks
-      const incomingWikilinks = links.map(lnk => {
-        const cleanLink = lnk.startsWith('[[') && lnk.endsWith(']]') ? lnk.slice(2, -2) : lnk;
-        return `[[${cleanLink}]]`;
-      });
-      
       const tags = [typeSingular];
       if (taint.isTainted) {
-        tags.push('untrusted'); // Quarantine tag
+        tags.push('untrusted');
       }
       
       if (isNew) {
-        // Create new note
         const frontmatter = {
           note_type: typeSingular,
           created: today,
           tags
         };
         
-        const noteBody = [
-          `# ${title}`,
-          '',
-          content,
-          '',
-          '## Links',
-          ...incomingWikilinks.map(wl => `- ${wl}`),
-          '',
-          `up:: [[${folder}/_Index]]`
-        ].join('\n');
+        let cleanContent = content.replace(/\r\n/g, '\n').trim();
+        cleanContent = cleanContent.replace(/^#\s+.*$/m, '').trim();
+        const linksIdx = cleanContent.indexOf('## Links');
+        if (linksIdx !== -1) {
+          cleanContent = cleanContent.substring(0, linksIdx).trim();
+        }
+        cleanContent = cleanContent.replace(/^up::\s*.*$/gm, '').trim();
         
-        const fileData = `${stringifyFrontmatter(frontmatter)}\n${noteBody}`;
+        const cleanLinks = new Set<string>();
+        links.forEach(lnk => {
+          let cleanLnk = lnk.trim();
+          if (cleanLnk.startsWith('[[') && cleanLnk.endsWith(']]')) {
+            cleanLnk = cleanLnk.slice(2, -2).trim();
+          }
+          if (cleanLnk) {
+            cleanLinks.add(cleanLnk);
+          }
+        });
+        
+        const parentLink = `${folder}/_Index`;
+        cleanLinks.delete(parentLink);
+        
+        const newNote: ObsidianNote = {
+          frontmatter,
+          title,
+          body: cleanContent,
+          links: cleanLinks,
+          parentLink
+        };
+        
+        const fileData = serializeObsidianNote(newNote);
         await fs.writeFile(filePath, fileData, 'utf8');
         await logAudit(sessionId, 'remember_success', { path: `${folder}/${safeTitle}.md`, isNew: true, tainted: taint.isTainted });
         return `Successfully created new note: ${folder}/${safeTitle}.md${taint.isTainted ? ' (marked untrusted)' : ''}`;
       } else {
-        // Merge with existing note
-        const { frontmatter, body } = parseNote(existingContent);
+        const existingNote = parseObsidianNote(existingContent, title);
         
-        // Merge tags
-        const existingTags = Array.isArray(frontmatter.tags) ? frontmatter.tags : [];
+        const existingTags = Array.isArray(existingNote.frontmatter.tags) ? existingNote.frontmatter.tags : [];
         const mergedTags = Array.from(new Set([...existingTags, ...tags]));
-        frontmatter.tags = mergedTags;
-        frontmatter.updated = today;
+        existingNote.frontmatter.tags = mergedTags;
+        existingNote.frontmatter.updated = today;
         
-        // Merge content: append new content section
-        const mergedBody = body.trim() + `\n\n### Updated on ${today}\n${content}`;
+        const mergedNote = mergeObsidianNote(existingNote, content, links, today);
+        const fileData = serializeObsidianNote(mergedNote);
         
-        // Extract existing wikilinks
-        const bodyWikilinks: string[] = [];
-        const linkRegex = /\[\[(.*?)\]\]/g;
-        let match;
-        while ((match = linkRegex.exec(existingContent)) !== null) {
-          bodyWikilinks.push(`[[${match[1]}]]`);
-        }
-        
-        const mergedWikilinks = Array.from(new Set([...bodyWikilinks, ...incomingWikilinks]));
-        
-        const bodyWithoutLinks = mergedBody
-          .replace(/## Links[\s\S]*?(?=up::|$)/g, '')
-          .replace(/up::[\s\S]*$/g, '')
-          .trim();
-          
-        const noteBody = [
-          bodyWithoutLinks,
-          '',
-          '## Links',
-          ...mergedWikilinks.map(wl => `- ${wl}`),
-          '',
-          `up:: [[${folder}/_Index]]`
-        ].join('\n');
-        
-        const fileData = `${stringifyFrontmatter(frontmatter)}\n${noteBody}`;
         await fs.writeFile(filePath, fileData, 'utf8');
         await logAudit(sessionId, 'remember_success', { path: `${folder}/${safeTitle}.md`, isNew: false, tainted: taint.isTainted });
         return `Successfully merged note: ${folder}/${safeTitle}.md${taint.isTainted ? ' (marked untrusted)' : ''}`;

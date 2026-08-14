@@ -5,6 +5,8 @@ import { scanAndTaint, getSessionTaint } from './core/taint';
 import { logAudit, isKillSwitchTriggered, triggerKillSwitch, resetKillSwitch, verifyAuditChain } from './core/audit';
 import { validatePath, isInsideRoot, assertNoSymlinkEscape } from './tools/index';
 import { parseShellCommand, validateAndNormalizeCommand } from './tools/mutate';
+import { parseObsidianNote, serializeObsidianNote, mergeObsidianNote } from './tools/obsidian';
+import { runWithProviderFallback, ProviderName } from './core/providers';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
@@ -394,6 +396,123 @@ async function runTests() {
     console.log('✅ Symlink-escape Guard Test Passed');
   } catch (err: any) {
     console.error('❌ Symlink-escape Guard Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 13. Obsidian Note Parser and Merger
+  try {
+    console.log('\n13. Testing Obsidian Note Parser and Merger...');
+    
+    const mockNoteContent = `---
+note_type: session
+created: 2026-06-26
+tags: [session]
+---
+# Session Note - June 26, 2026
+
+Workspace is the **Ai-agent-system-CLI** project.
+
+## Links
+- [[Projects/Ai-agent-system-CLI]]
+
+up:: [[Sessions/_Index]]`;
+
+    // 13.1 Parse Test
+    const parsed = parseObsidianNote(mockNoteContent, 'Session Note - June 26_ 2026');
+    if (parsed.title !== 'Session Note - June 26, 2026') {
+      throw new Error(`Parse failed: Title was "${parsed.title}" instead of "Session Note - June 26, 2026"`);
+    }
+    if (parsed.frontmatter.note_type !== 'session') {
+      throw new Error(`Parse failed: frontmatter.note_type was "${parsed.frontmatter.note_type}"`);
+    }
+    if (!parsed.links.has('Projects/Ai-agent-system-CLI')) {
+      throw new Error('Parse failed: Missing links');
+    }
+    if (parsed.parentLink !== 'Sessions/_Index') {
+      throw new Error(`Parse failed: parentLink was "${parsed.parentLink}"`);
+    }
+    if (!parsed.body.includes('Workspace is the')) {
+      throw new Error(`Parse failed: Body was "${parsed.body}"`);
+    }
+    if (parsed.body.includes('## Links') || parsed.body.includes('up::')) {
+      throw new Error('Parse failed: Body contained Links or up:: parent link');
+    }
+    
+    // 13.2 Merge Test (Deduplication of headers, links, and content update)
+    const updateContent = `# Session Note - June 26, 2026
+Workspace is the **Ai-agent-system-CLI** project.
+Some newly added detail!
+## Links
+- [[Projects/Ai-agent-system-CLI]]
+- [[Entities/auth]]
+up:: [[Sessions/_Index]]`;
+    
+    const merged = mergeObsidianNote(parsed, updateContent, ['Projects/Ai-agent-system-CLI', 'Entities/auth'], '2026-08-14');
+    
+    if (!merged.body.includes('Some newly added detail!')) {
+      throw new Error('Merge failed: New details not appended');
+    }
+    if (!merged.links.has('Entities/auth')) {
+      throw new Error('Merge failed: Failed to add new link');
+    }
+    if (merged.links.has('Sessions/_Index')) {
+      throw new Error('Merge failed: Parent link was incorrectly added to Links section');
+    }
+    
+    // 13.3 Serialize Test
+    const serialized = serializeObsidianNote(merged);
+    if (!serialized.startsWith('---')) {
+      throw new Error('Serialize failed: Missing YAML block');
+    }
+    if (!serialized.includes('# Session Note - June 26, 2026')) {
+      throw new Error('Serialize failed: Missing Title');
+    }
+    if (!serialized.includes('## Links\n- [[Entities/auth]]\n- [[Projects/Ai-agent-system-CLI]]')) {
+      throw new Error('Serialize failed: Links section incorrect or not sorted');
+    }
+    if (!serialized.includes('up:: [[Sessions/_Index]]')) {
+      throw new Error('Serialize failed: Missing parent link at end');
+    }
+    
+    console.log('✅ Obsidian Note Parser and Merger Test Passed');
+  } catch (err: any) {
+    console.error('❌ Obsidian Note Parser and Merger Test Failed:', err.message);
+    passed = false;
+  }
+
+  // 14. Multi-provider Fallback Routing
+  try {
+    console.log('\n14. Testing Multi-provider Fallback Routing...');
+    
+    let attemptCount = 0;
+    const mockOnTry = async (provider: ProviderName, _model: any) => {
+      attemptCount++;
+      if (provider === 'deepseek') {
+        throw new Error('Simulated DeepSeek API failure (e.g. invalid key)');
+      }
+      return `Success from ${provider}`;
+    };
+    
+    const prevProvider = process.env.MODEL_PROVIDER;
+    process.env.MODEL_PROVIDER = 'deepseek';
+    
+    const { result, providerUsed } = await runWithProviderFallback(mockOnTry);
+    
+    process.env.MODEL_PROVIDER = prevProvider;
+    
+    if (providerUsed === 'deepseek') {
+      throw new Error('Fallback failed: DeepSeek should have been skipped after error');
+    }
+    if (result !== 'Success from hermes') {
+      throw new Error(`Fallback failed: Expected success from hermes, got: ${result}`);
+    }
+    if (attemptCount < 2) {
+      throw new Error('Fallback failed: First provider was not attempted or second was not called');
+    }
+    
+    console.log('✅ Multi-provider Fallback Routing Test Passed');
+  } catch (err: any) {
+    console.error('❌ Multi-provider Fallback Routing Test Failed:', err.message);
     passed = false;
   }
 

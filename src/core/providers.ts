@@ -130,3 +130,40 @@ export function parseProviderName(raw: string): ProviderName | null {
   if (v === 'hermes' || v === 'ollama' || v === 'local') return 'hermes';
   return null;
 }
+
+/**
+ * Executes a callback with the primary provider, falling back to other configured
+ * and ready providers in case of failure.
+ */
+export async function runWithProviderFallback<T>(
+  onTry: (provider: ProviderName, model: LanguageModel) => Promise<T>,
+  onWarning?: (provider: ProviderName, error: Error) => void
+): Promise<{ result: T; providerUsed: ProviderName }> {
+  const primaryProvider = getProviderName();
+  
+  // Build fallback list: primary first, then others that are ready
+  const fallbacks: ProviderName[] = [primaryProvider];
+  PROVIDERS.forEach(p => {
+    if (p !== primaryProvider && checkProviderReady(p) === null) {
+      fallbacks.push(p);
+    }
+  });
+  
+  let lastError: any;
+  for (const provider of fallbacks) {
+    try {
+      const model = getModel(provider);
+      const res = await onTry(provider, model);
+      return { result: res, providerUsed: provider };
+    } catch (err: any) {
+      if (onWarning) {
+        onWarning(provider, err);
+      } else {
+        console.warn(`⚠️ Provider '${provider}' failed: ${err.message}. Trying next fallback...`);
+      }
+      lastError = err;
+    }
+  }
+  
+  throw new Error(`All configured providers failed. Last error: ${lastError?.message}`);
+}

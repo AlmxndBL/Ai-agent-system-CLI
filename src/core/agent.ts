@@ -7,7 +7,7 @@ import { getVaultPath, getVaultFiles } from '../tools/obsidian';
 import { compactMessages } from './compaction';
 import { isKillSwitchTriggered } from './audit';
 import { scanAndTaint } from './taint';
-import { getModel, getProviderName, getContextWindow } from './providers';
+import { getProviderName, getContextWindow, runWithProviderFallback } from './providers';
 
 const BASE_SYSTEM_PROMPT = `You are a powerful local-first AI coding agent.
 You assist the user in writing, viewing, and maintaining code inside their workspace.
@@ -109,22 +109,32 @@ export async function runAgent(
         { role: 'user', content: userMessage }
       ];
       
-      const provider = getProviderName();
-      const model = getModel(provider);
-      
-      // 3. Call streamText (Vercel AI SDK handles the multi-step tool loop automatically)
-      const result = streamText({
-        model,
-        system: systemPrompt,
-        messages: updatedMessages,
-        tools,
-        stopWhen: stepCountIs(10), // Hard step cap to prevent runaway loops
-        onStepFinish({ toolCalls, toolResults }) {
-          if (options.onStepFinish && (toolCalls.length > 0 || toolResults.length > 0)) {
-            options.onStepFinish({ toolCalls, toolResults });
+      const { result, providerUsed } = await runWithProviderFallback(async (_, model) => {
+        const stream = streamText({
+          model,
+          system: systemPrompt,
+          messages: updatedMessages,
+          tools,
+          stopWhen: stepCountIs(10), // Hard step cap to prevent runaway loops
+          onStepFinish({ toolCalls, toolResults }) {
+            if (options.onStepFinish && (toolCalls.length > 0 || toolResults.length > 0)) {
+              options.onStepFinish({ toolCalls, toolResults });
+            }
           }
-        }
+        });
+        
+        // Force evaluation of initial headers/connection to trigger authentication error early
+        await stream.response;
+        return stream;
       });
+      
+      const provider = getProviderName();
+      if (providerUsed !== provider) {
+        console.log(`⚠️ [Fallback Active] Switched to '${providerUsed}' because '${provider}' failed.`);
+        if (options.onTextDelta) {
+          options.onTextDelta(`\n⚠️ _[System: Fallback active - switched to ${providerUsed} due to primary provider failure]_\n`);
+        }
+      }
 
       // Drain the stream: forward deltas live when a sink is provided (terminal REPL),
       // otherwise consume it to drive the tool loop to completion (chat channels buffer
@@ -148,11 +158,14 @@ export async function runAgent(
       
       // Perform token-window compaction if necessary, using THIS model's context
       // window (§6.4) — compactMessages triggers at ~75% of this value.
-      const maxTokens = getContextWindow(provider);
+      const maxTokens = getContextWindow(providerUsed);
       finalMessages = await compactMessages(finalMessages, maxTokens, async (pruneText) => {
-        const summaryRes = await generateText({
-          model: getModel(provider),
-          prompt: `Briefly summarize the following developer conversation history to preserve memory. Keep key decisions, constraints, and instructions. Respond with the raw summary only:\n\n${pruneText}`
+        const { result: summaryRes } = await runWithProviderFallback(async (_, m) => {
+          const res = await generateText({
+            model: m,
+            prompt: `Briefly summarize the following developer conversation history to preserve memory. Keep key decisions, constraints, and instructions. Respond with the raw summary only:\n\n${pruneText}`
+          });
+          return res;
         });
         return summaryRes.text;
       });
