@@ -4,21 +4,17 @@
     "type": "split",
     "children": [
       {
-        "id": "79cde9ebd09fc4b5",
+        "id": "632f543387fbd72c",
         "type": "tabs",
         "children": [
           {
-            "id": "c7d7b9bd4e9ae51d",
+            "id": "a9b7c8f94fe547a4",
             "type": "leaf",
             "state": {
-              "type": "markdown",
-              "state": {
-                "file": "Sessions/Session Note - June 26_ 2026.md",
-                "mode": "source",
-                "source": false
-              },
+              "type": "empty",
+              "state": {},
               "icon": "lucide-file",
-              "title": "Session Note - June 26_ 2026"
+              "title": "แท็บใหม่"
             }
           }
         ]
@@ -183,10 +179,11 @@
       "bases:สร้างฐานใหม่": false
     }
   },
-  "active": "c7d7b9bd4e9ae51d",
+  "active": "a9b7c8f94fe547a4",
   "lastOpenFiles": [
-    "Sessions/Session Note - June 26, 2026.md",
+    "ยังไม่ได้ตั้งชื่อ",
     "Sessions/Session Note - June 26_ 2026.md",
+    "Sessions/Session Note - June 26, 2026.md",
     "Projects/Ai-agent-system-CLI.md"
   ]
 }
